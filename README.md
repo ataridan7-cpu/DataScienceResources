@@ -1,3 +1,9 @@
+> **📈 Featured project — [SOL Trading-Strategy Research Pipeline](PROJECT_SOL_TRADING.md):**
+> a leakage-controlled, end-to-end pipeline that engineers features, grid/Optuna-searches
+> feature combinations + rules + models + hyperparameters to **maximize net profit**, and
+> compares honestly against buy & hold (walk-forward CV, costs, a once-touched holdout, and
+> null/bootstrap robustness tests). See [`notebooks/01_sol_strategy_research.ipynb`](notebooks/01_sol_strategy_research.ipynb).
+
 ## Data Science Resources
 
 Hello and welcome to the Data Science Resources repo.  I originally built this repo so that I could have a location to host resources that are helpful to me.  Through building the repo I realized that other people might be also be interested. I have tried to curate content on data science topics, high quality resources to learn from, and relevant blog posts.
