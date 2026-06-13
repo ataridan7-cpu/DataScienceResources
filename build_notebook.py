@@ -452,7 +452,7 @@ code(r"""
 rules = stage_rules(data, CFG)
 show = ["rule", "params", "mean_excess_return", "mean_return", "mean_sharpe",
         "pct_folds_beat_bh", "score"]
-print("Rule grids ranked by EXCESS return vs B&H (score = mean_excess − 0.25·std):\n")
+print("Rule grids ranked by EXCESS return vs B&H (score = mean fold model_profit − B&H):\n")
 for mode in ("long_only", "long_short"):
     print(f"### {mode} — top 5:")
     print(rules[mode][show].head(5).to_string(index=False), "\n")
@@ -542,7 +542,7 @@ for key, r in ml_results.items():
 dev_lb = (pd.DataFrame(rows)
           .sort_values("dev_score_excess", ascending=False)
           .reset_index(drop=True))
-print("Dev-set leaderboard — ranked by mean OOS EXCESS return vs B&H (− 0.25·std):")
+print("Dev-set leaderboard — ranked by mean OOS EXCESS return vs B&H (model_profit − B&H):")
 dev_lb
 """)
 
