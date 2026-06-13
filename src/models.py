@@ -71,6 +71,22 @@ def rule_bollinger(df: pd.DataFrame, mode: str = "long_only", n: int = 20, k: fl
     return _hysteresis(df.index, long_entry, long_exit, short_entry, short_exit)
 
 
+def rule_tsmom(df: pd.DataFrame, mode: str = "long_only", lookback: int = 63,
+               skip: int = 0) -> pd.Series:
+    """Time-series momentum: hold long while the trailing return is positive.
+
+    Signal at close t uses the return from t-lookback to t-skip (skip>0 drops the
+    most recent days to sidestep short-term reversal — the classic 12-1 trick).
+    Strictly causal: every term is a past close.
+    """
+    c = df["close"]
+    mom = c.shift(skip) / c.shift(lookback) - 1
+    sig = (mom > 0).astype(float)
+    if mode == "long_short":
+        sig = sig.where(mom.isna() | (mom > 0), -1.0)
+    return sig.where(mom.notna(), 0.0)
+
+
 def rule_donchian(df: pd.DataFrame, mode: str = "long_only", n_entry: int = 20,
                   n_exit: int = 10) -> pd.Series:
     c = df["close"]
@@ -109,6 +125,11 @@ RULES: dict[str, dict] = {
         "fn": rule_donchian,
         "grid": {"n_entry": [10, 20, 40, 55], "n_exit": [5, 10, 20]},
         "constraint": None,
+    },
+    "tsmom": {
+        "fn": rule_tsmom,
+        "grid": {"lookback": [21, 42, 63, 90, 126], "skip": [0, 5, 10]},
+        "constraint": lambda p: p["skip"] < p["lookback"],
     },
 }
 
