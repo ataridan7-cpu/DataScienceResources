@@ -613,13 +613,26 @@ hold_ret = data["ret"].iloc[data["hold_idx"]]
 
 print(f"HOLDOUT buy & hold: return={bh_row['total_return']:.1%}  "
       f"Sharpe={bh_row['sharpe']:.2f}  maxDD={bh_row['max_drawdown']:.1%}")
-print("All strategies below are scored by EXCESS RETURN over this benchmark.\n")
+print("Ranked by EXCESS return (alpha) over this benchmark — but read it WITH the")
+print("absolute return: a strategy can 'beat B&H' while still losing money in a")
+print("down market, so 'outcome' separates relative alpha from making real profit.\n")
 
-# excess_return & vs_bh_x come straight from the pipeline (profit vs B&H, not alone)
+def add_outcome(frame):
+    f = frame.copy()
+    # additive excess (return points) is always meaningful; the '× B&H' multiple
+    # is only honest when BOTH legs are profitable, so the pipeline leaves it NaN
+    # otherwise. Surface that as 'n/a' rather than a misleading ratio.
+    f["outcome"] = np.select(
+        [f["beats_bh"] & f["profitable"], f["beats_bh"], f["profitable"]],
+        ["beats B&H + profit", "beats B&H but LOST $", "profit, trails B&H"],
+        default="lost $, trails B&H")
+    f["vs_bh_x"] = f["vs_bh_x"].map(lambda x: f"{x:.2f}x" if pd.notna(x) else "n/a")
+    return f
+
 cols = ["strategy","type","mode","total_return","excess_return","vs_bh_x",
-        "sharpe","max_drawdown","calmar","win_rate","n_trades"]
+        "outcome","sharpe","max_drawdown","calmar","n_trades"]
 print("Holdout leaderboard (ranked by EXCESS return vs Buy & Hold):")
-lb[cols].head(15)
+add_outcome(lb)[cols].head(15)
 """)
 
 code(r"""
@@ -695,13 +708,23 @@ def best_of(mode):
     sub = lb[(lb["mode"] == mode) & (lb["type"] != "benchmark")]
     return sub.iloc[0] if len(sub) else None
 
+def verdict(row):
+    # only a genuine win if it BOTH beat B&H AND actually made money
+    if row["beats_bh"] and row["profitable"]: return "WINS  ✓ (beats B&H + profit)"
+    if row["beats_bh"]:                       return "beats B&H but LOST money ✗"
+    if row["profitable"]:                     return "made money but TRAILS B&H ✗"
+    return "lost money AND trails B&H ✗"
+
+def mult_str(row):
+    # '× B&H' only printed when it's an honest comparison (both legs profitable)
+    return f"{row['vs_bh_x']:.2f}× B&H" if pd.notna(row["vs_bh_x"]) else "×B&H n/a (a loss → ratio misleading)"
+
 for mode in ("long_only", "long_short"):
     w = best_of(mode)
     if w is None: continue
-    beat = "BEATS  ✓" if w["excess_return"] > 0 else "TRAILS ✗"
-    print(f"[{mode}] winner: {w['strategy']}")
+    print(f"[{mode}] top by alpha: {w['strategy']}")
     print(f"  return {w['total_return']:.1%}  vs  B&H {bh_row['total_return']:.1%}   "
-          f"→  EXCESS {w['excess_return']:+.1%}  ({w['vs_bh_x']:.2f}× B&H)  {beat}")
+          f"→  EXCESS {w['excess_return']:+.1%}  ({mult_str(w)})  {verdict(w)}")
     print(f"  Sharpe {w['sharpe']:.2f}  maxDD {w['max_drawdown']:.1%}  "
           f"Calmar {w['calmar']:.2f}  wins {w['win_rate']:.1%}  trades {int(w['n_trades'])}\n")
 
@@ -902,6 +925,11 @@ Key caveats to read alongside the verdict below:
 - Fees + slippage included; the cost-sweep shows how much edge remains at higher costs.
 - ~1.9k daily bars is small: prefer stable, simple configs and treat the null-test
   p-value and bootstrap CIs as the honest confidence check.
+- **Read excess WITH absolute return.** Excess (return points vs B&H) is always
+  meaningful, but the `× B&H` growth-multiple is only shown when *both* the strategy
+  and B&H finished in profit — otherwise it is misleading (it explodes when B&H is
+  negative, and makes a money-losing strategy that "fell less" look like a winner).
+  A strategy is only crowned a winner here if it is **profitable AND beats B&H**.
 """)
 
 code(r"""
@@ -913,15 +941,29 @@ print(f"Buy & Hold      : return {bh_row['total_return']:>8.1%} | excess  +0.0% 
 for mode in ("long_only", "long_short"):
     w = best_of(mode)
     if w is None: continue
-    beat = "BEATS  ✓" if w["excess_return"] > 0 else "TRAILS ✗"
+    # a flag PER condition so 'beat B&H' (relative) and 'made money' (absolute) never blur
+    tag = ("BEATS+PROFIT ✓" if (w["beats_bh"] and w["profitable"]) else
+           "BEATS but LOST $ ✗" if w["beats_bh"] else
+           "PROFIT, trails ✗" if w["profitable"] else "lost+trails ✗")
     print(f"Best {mode:<12}: return {w['total_return']:>8.1%} | excess {w['excess_return']:>+6.1%} | "
           f"Sharpe {w['sharpe']:>5.2f} | maxDD {w['max_drawdown']:>7.1%}  "
-          f"{beat}  <- {w['strategy']}")
+          f"{tag}  <- {w['strategy']}")
 ov = lb.iloc[0]   # leaderboard is sorted by excess_return
+mult = f"{ov['vs_bh_x']:.2f}× B&H" if pd.notna(ov['vs_bh_x']) else "× n/a (loss → ratio misleading)"
 print("-"*72)
 print(f"Biggest alpha over B&H  : {ov['strategy']} [{ov['mode']}] = "
-      f"{ov['excess_return']:+.1%} excess  ({ov['vs_bh_x']:.2f}× B&H, "
+      f"{ov['excess_return']:+.1%} excess  ({mult}, "
       f"total {ov['total_return']:.1%}, Sharpe {ov['sharpe']:.2f})")
+# the headline 'winner' must clear BOTH bars: real profit AND beating B&H
+real = lb[(lb.type != "benchmark") & lb["beats_bh"] & lb["profitable"]]
+if len(real):
+    win = real.iloc[0]
+    print(f"==> RECOMMENDED winner    : {win['strategy']} [{win['mode']}] — "
+          f"{win['total_return']:.1%} return, {win['excess_return']:+.1%} vs B&H, "
+          f"Sharpe {win['sharpe']:.2f}  (profitable AND beats B&H)")
+else:
+    print("==> No strategy was BOTH profitable AND ahead of B&H on the holdout — "
+          "buy & hold wins this window.")
 best_shp = lb[lb.type != "benchmark"].sort_values("sharpe", ascending=False).iloc[0]
 print(f"Best risk-adjusted      : {best_shp['strategy']} [{best_shp['mode']}] "
       f"= Sharpe {best_shp['sharpe']:.2f} (excess {best_shp['excess_return']:+.1%})")

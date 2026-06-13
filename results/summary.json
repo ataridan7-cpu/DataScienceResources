@@ -21,14 +21,16 @@
       "n_trades": 91,
       "n_bars": 254,
       "excess_return": 1.5470881772488538,
-      "vs_bh_x": 2.4297383802982533
+      "vs_bh_x": 2.4297383802982533,
+      "profitable": true,
+      "beats_bh": true
     },
     {
       "strategy": "ma_cross {\"fast\": 15, \"slow\": 30}",
       "type": "rule",
       "mode": "long_short",
       "dev_score": -0.2519551998082059,
-      "dev_mean_excess": -0.11284771855049543,
+      "dev_mean_excess": -0.1128477185504954,
       "dev_mean_return": 0.6577636695983236,
       "total_return": 0.7537947968980441,
       "cagr": 1.2418132106332171,
@@ -44,7 +46,9 @@
       "n_trades": 8,
       "n_bars": 254,
       "excess_return": 0.6717169856231444,
-      "vs_bh_x": 1.6207658808119632
+      "vs_bh_x": 1.6207658808119632,
+      "profitable": true,
+      "beats_bh": true
     },
     {
       "strategy": "catboost",
@@ -67,7 +71,9 @@
       "n_trades": 145,
       "n_bars": 254,
       "excess_return": 0.5483774991343828,
-      "vs_bh_x": 1.5067819461969068
+      "vs_bh_x": 1.5067819461969068,
+      "profitable": true,
+      "beats_bh": true
     },
     {
       "strategy": "lightgbm",
@@ -90,7 +96,9 @@
       "n_trades": 78,
       "n_bars": 254,
       "excess_return": 0.3503368011988963,
-      "vs_bh_x": 1.323763039541612
+      "vs_bh_x": 1.323763039541612,
+      "profitable": true,
+      "beats_bh": true
     },
     {
       "strategy": "logistic",
@@ -113,7 +121,9 @@
       "n_trades": 69,
       "n_bars": 254,
       "excess_return": 0.25908543475853785,
-      "vs_bh_x": 1.2394332755546336
+      "vs_bh_x": 1.2394332755546336,
+      "profitable": true,
+      "beats_bh": true
     },
     {
       "strategy": "random_forest",
@@ -136,7 +146,9 @@
       "n_trades": 22,
       "n_bars": 254,
       "excess_return": 0.24727150595446745,
-      "vs_bh_x": 1.2285154573709751
+      "vs_bh_x": 1.2285154573709751,
+      "profitable": true,
+      "beats_bh": true
     },
     {
       "strategy": "xgboost",
@@ -159,7 +171,9 @@
       "n_trades": 71,
       "n_bars": 254,
       "excess_return": 0.20278622062284657,
-      "vs_bh_x": 1.1874044717578347
+      "vs_bh_x": 1.1874044717578347,
+      "profitable": true,
+      "beats_bh": true
     },
     {
       "strategy": "random_forest",
@@ -182,7 +196,9 @@
       "n_trades": 38,
       "n_bars": 254,
       "excess_return": 0.095656936155748,
-      "vs_bh_x": 1.0884011622445575
+      "vs_bh_x": 1.0884011622445575,
+      "profitable": true,
+      "beats_bh": true
     },
     {
       "strategy": "catboost",
@@ -205,7 +221,9 @@
       "n_trades": 86,
       "n_bars": 254,
       "excess_return": 0.09460875688871373,
-      "vs_bh_x": 1.0874324895150065
+      "vs_bh_x": 1.0874324895150065,
+      "profitable": true,
+      "beats_bh": true
     },
     {
       "strategy": "lstm",
@@ -228,7 +246,9 @@
       "n_trades": 238,
       "n_bars": 254,
       "excess_return": 0.07375108969100497,
-      "vs_bh_x": 1.0681569189595632
+      "vs_bh_x": 1.0681569189595632,
+      "profitable": true,
+      "beats_bh": true
     },
     {
       "strategy": "logistic",
@@ -251,7 +271,9 @@
       "n_trades": 61,
       "n_bars": 254,
       "excess_return": 0.07200433371243542,
-      "vs_bh_x": 1.0665426579883384
+      "vs_bh_x": 1.0665426579883384,
+      "profitable": true,
+      "beats_bh": true
     },
     {
       "strategy": "BUY & HOLD",
@@ -274,7 +296,9 @@
       "n_trades": 1,
       "n_bars": 254,
       "excess_return": 0.0,
-      "vs_bh_x": 1.0
+      "vs_bh_x": 1.0,
+      "profitable": true,
+      "beats_bh": false
     },
     {
       "strategy": "svm_rbf",
@@ -297,14 +321,16 @@
       "n_trades": 1,
       "n_bars": 254,
       "excess_return": 0.0,
-      "vs_bh_x": 1.0
+      "vs_bh_x": 1.0,
+      "profitable": true,
+      "beats_bh": false
     },
     {
       "strategy": "macd {\"fast\": 12, \"slow\": 20, \"signal\": 6}",
       "type": "rule",
       "mode": "long_only",
-      "dev_score": -0.04951648638682023,
-      "dev_mean_excess": 0.03636660103638589,
+      "dev_score": -0.0495164863868202,
+      "dev_mean_excess": 0.0363666010363858,
       "dev_mean_return": 0.8069779891852047,
       "total_return": 0.07134909157726677,
       "cagr": 0.1041068158512275,
@@ -320,7 +346,9 @@
       "n_trades": 17,
       "n_bars": 254,
       "excess_return": -0.010728719697632894,
-      "vs_bh_x": 0.9900850755963729
+      "vs_bh_x": 0.9900850755963729,
+      "profitable": true,
+      "beats_bh": false
     },
     {
       "strategy": "lightgbm",
@@ -343,14 +371,16 @@
       "n_trades": 94,
       "n_bars": 254,
       "excess_return": -0.03290916360150287,
-      "vs_bh_x": 0.9695870636486581
+      "vs_bh_x": 0.9695870636486581,
+      "profitable": true,
+      "beats_bh": false
     },
     {
       "strategy": "macd {\"fast\": 8, \"slow\": 20, \"signal\": 9}",
       "type": "rule",
       "mode": "long_only",
-      "dev_score": -0.05178355680135101,
-      "dev_mean_excess": 0.03454108708078585,
+      "dev_score": -0.051783556801351,
+      "dev_mean_excess": 0.0345410870807858,
       "dev_mean_return": 0.8051524752296046,
       "total_return": 0.031672531328914566,
       "cagr": 0.045826808243631056,
@@ -366,7 +396,9 @@
       "n_trades": 19,
       "n_bars": 254,
       "excess_return": -0.05040527994598509,
-      "vs_bh_x": 0.9534180634509104
+      "vs_bh_x": 0.9534180634509104,
+      "profitable": true,
+      "beats_bh": false
     },
     {
       "strategy": "svm_rbf",
@@ -389,7 +421,9 @@
       "n_trades": 245,
       "n_bars": 254,
       "excess_return": -0.06892366932261962,
-      "vs_bh_x": 0.9363043317176849
+      "vs_bh_x": 0.9363043317176849,
+      "profitable": true,
+      "beats_bh": false
     },
     {
       "strategy": "mlp",
@@ -412,7 +446,9 @@
       "n_trades": 27,
       "n_bars": 254,
       "excess_return": -0.07587678815243493,
-      "vs_bh_x": 0.9298786211473672
+      "vs_bh_x": 0.9298786211473672,
+      "profitable": true,
+      "beats_bh": false
     },
     {
       "strategy": "lstm",
@@ -435,7 +471,9 @@
       "n_trades": 52,
       "n_bars": 254,
       "excess_return": -0.08536006259386131,
-      "vs_bh_x": 0.9211146724344246
+      "vs_bh_x": NaN,
+      "profitable": false,
+      "beats_bh": false
     },
     {
       "strategy": "transformer",
@@ -458,14 +496,16 @@
       "n_trades": 46,
       "n_bars": 254,
       "excess_return": -0.21521740508168452,
-      "vs_bh_x": 0.8011072745054107
+      "vs_bh_x": NaN,
+      "profitable": false,
+      "beats_bh": false
     },
     {
       "strategy": "ma_cross {\"fast\": 10, \"slow\": 30}",
       "type": "rule",
       "mode": "long_short",
-      "dev_score": -0.28669124050155176,
-      "dev_mean_excess": -0.19305516166275435,
+      "dev_score": -0.2866912405015517,
+      "dev_mean_excess": -0.1930551616627543,
       "dev_mean_return": 0.5775562264860645,
       "total_return": -0.14813791061308834,
       "cagr": -0.20578127301283944,
@@ -481,7 +521,9 @@
       "n_trades": 10,
       "n_bars": 254,
       "excess_return": -0.230215721887988,
-      "vs_bh_x": 0.7872466106510873
+      "vs_bh_x": NaN,
+      "profitable": false,
+      "beats_bh": false
     },
     {
       "strategy": "knn",
@@ -504,7 +546,9 @@
       "n_trades": 54,
       "n_bars": 254,
       "excess_return": -0.30558950863892,
-      "vs_bh_x": 0.7175900795166702
+      "vs_bh_x": NaN,
+      "profitable": false,
+      "beats_bh": false
     },
     {
       "strategy": "xgboost",
@@ -527,7 +571,9 @@
       "n_trades": 112,
       "n_bars": 254,
       "excess_return": -0.4098915219132344,
-      "vs_bh_x": 0.6211995869037349
+      "vs_bh_x": NaN,
+      "profitable": false,
+      "beats_bh": false
     },
     {
       "strategy": "transformer",
@@ -550,7 +596,9 @@
       "n_trades": 88,
       "n_bars": 254,
       "excess_return": -0.417628526188623,
-      "vs_bh_x": 0.6140494501993579
+      "vs_bh_x": NaN,
+      "profitable": false,
+      "beats_bh": false
     },
     {
       "strategy": "knn",
@@ -573,7 +621,9 @@
       "n_trades": 138,
       "n_bars": 254,
       "excess_return": -0.7086890305967705,
-      "vs_bh_x": 0.34506647931187506
+      "vs_bh_x": NaN,
+      "profitable": false,
+      "beats_bh": false
     }
   ],
   "buy_hold_return": 0.08207781127489966,
@@ -599,8 +649,10 @@
     "n_trades": 91,
     "n_bars": 254,
     "excess_return": 1.5470881772488538,
-    "vs_bh_x": 2.4297383802982533
+    "vs_bh_x": 2.4297383802982533,
+    "profitable": true,
+    "beats_bh": true
   },
   "best_excess_return": 1.5470881772488538,
-  "elapsed_sec": 1332.9
+  "elapsed_sec": 65.5
 }

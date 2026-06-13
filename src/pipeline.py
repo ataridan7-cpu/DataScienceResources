@@ -137,17 +137,24 @@ def final_leaderboard(data, ml_results: dict, rules_results: dict, feature_sets:
                       cfg: Config = CFG, top_rules: int = 2) -> tuple[pd.DataFrame, dict]:
     """One-shot holdout evaluation of every tuned family + top rules + B&H.
 
-    Every strategy row carries `excess_return` (= total_return − B&H) and
-    `vs_bh_x` (growth-multiple relative to B&H), so profit is always reported
-    against the buy-and-hold benchmark, not in isolation.
+    Every strategy row carries `excess_return` (= total_return − B&H, in return
+    points — always meaningful), `profitable`/`beats_bh` flags, and `vs_bh_x`
+    (growth-multiple vs B&H). The multiple is ONLY defined when both the
+    strategy and B&H finished in profit; otherwise the ratio is misleading
+    (it explodes when B&H < 0, and dresses up a money-loser as a "winner" when
+    both are negative), so it is left NaN and the additive excess is used.
     """
     hold_ret = data["ret"].iloc[data["hold_idx"]]
     bh = perf_metrics(buy_and_hold(hold_ret, cfg.cost_bps_per_side), cfg.periods_per_year)
     bh_ret = bh["total_return"]
 
     def _vs_bh(m: dict) -> dict:
-        return {"excess_return": m["total_return"] - bh_ret,
-                "vs_bh_x": (1 + m["total_return"]) / (1 + bh_ret)}
+        tr = m["total_return"]
+        excess = tr - bh_ret
+        # growth-multiple is an honest "N× B&H" only when BOTH legs are profitable
+        vs = (1 + tr) / (1 + bh_ret) if (tr > 0 and bh_ret > 0) else np.nan
+        return {"excess_return": excess, "vs_bh_x": vs,
+                "profitable": bool(tr > 0), "beats_bh": bool(excess > 0)}
 
     entries, signals = [], {}
 
@@ -184,7 +191,8 @@ def final_leaderboard(data, ml_results: dict, rules_results: dict, feature_sets:
     entries.append({"strategy": "BUY & HOLD", "type": "benchmark", "mode": "long_only",
                     "dev_score": np.nan, "dev_mean_excess": np.nan,
                     "dev_mean_return": np.nan, **bh,
-                    "excess_return": 0.0, "vs_bh_x": 1.0})
+                    "excess_return": 0.0, "vs_bh_x": 1.0,
+                    "profitable": bool(bh_ret > 0), "beats_bh": False})
 
     lb = (pd.DataFrame(entries)
           .sort_values("excess_return", ascending=False)

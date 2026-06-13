@@ -17,6 +17,9 @@ import json
 import time
 import warnings
 
+import numpy as np
+import pandas as pd
+
 warnings.filterwarnings("ignore")
 
 from src.config import CFG
@@ -69,9 +72,17 @@ def main(force: bool = False):
     print(f"\nDONE in {time.time()-t0:.0f}s")
     print(f"Buy & Hold holdout return: {bh['total_return']:.1%} (Sharpe {bh['sharpe']:.2f})")
     print("\nTop 8 by holdout EXCESS return vs Buy & Hold:")
+    disp = lb.head(8).copy()
+    # outcome makes the relative-vs-absolute distinction explicit so a strategy
+    # that "beats B&H" while still losing money is never read as a winner
+    disp["outcome"] = np.where(disp["beats_bh"] & disp["profitable"], "beats B&H + profit",
+                       np.where(disp["beats_bh"], "beats B&H but LOST $",
+                       np.where(disp["profitable"], "profit but trails B&H", "lost $ + trails")))
+    # "× B&H" is undefined (NaN) unless both legs are profitable -> show as "n/a"
+    disp["vs_bh_x"] = disp["vs_bh_x"].map(lambda x: f"{x:.2f}x" if pd.notna(x) else "n/a")
     cols = ["strategy", "mode", "total_return", "excess_return", "vs_bh_x",
-            "sharpe", "max_drawdown", "n_trades"]
-    print(lb[cols].head(8).to_string(index=False))
+            "sharpe", "max_drawdown", "n_trades", "outcome"]
+    print(disp[cols].to_string(index=False))
 
 
 if __name__ == "__main__":
