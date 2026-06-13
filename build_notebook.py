@@ -599,23 +599,40 @@ else:
 
 # ======================================================= 10. HOLDOUT EVAL
 md(r"""
-## 10. The moment of truth — one-shot holdout evaluation
+## 10. The moment of truth — honest one-shot holdout evaluation
 
-Every tuned config refit on the **full dev set** and evaluated **once** on the
-untouched holdout (most recent 15%), net of costs. Nothing here was optimised
-against this window.
+**Selection rule (critical for honesty):** the winner is the config with the best
+**dev score**, frozen *before* the holdout is touched. The holdout is then read
+**once** as the out-of-sample consequence of that pre-commitment.
+
+We deliberately do **not** run all configs through the holdout and crown the best —
+that is selection-on-test (winner's curse): with ~24 candidates the maximum holdout
+return is the luckiest draw, not the best model. The full holdout table is shown
+only as a **diagnostic**, and we report `Spearman(dev_score, holdout_excess)` so you
+can see for yourself whether dev rank carries any out-of-sample information.
 """)
 
 code(r"""
 lb, signals = final_leaderboard(data, ml_results, rules, fsets, CFG, top_rules=3)
 bh_row = lb[lb.strategy == "BUY & HOLD"].iloc[0]
 hold_ret = data["ret"].iloc[data["hold_idx"]]
+cand = lb[lb.type != "benchmark"]                 # lb is sorted by dev_score
+
+# --- the HONEST pick: highest dev score, chosen without seeing the holdout ---
+winner = cand.iloc[0]
+# --- winner's-curse diagnostic ---
+rank_corr = cand["dev_score"].corr(cand["excess_return"], method="spearman")
+holdout_max = cand.sort_values("excess_return", ascending=False).iloc[0]
 
 print(f"HOLDOUT buy & hold: return={bh_row['total_return']:.1%}  "
-      f"Sharpe={bh_row['sharpe']:.2f}  maxDD={bh_row['max_drawdown']:.1%}")
-print("Ranked by EXCESS return (alpha) over this benchmark — but read it WITH the")
-print("absolute return: a strategy can 'beat B&H' while still losing money in a")
-print("down market, so 'outcome' separates relative alpha from making real profit.\n")
+      f"Sharpe={bh_row['sharpe']:.2f}  maxDD={bh_row['max_drawdown']:.1%}\n")
+print(f"PRE-COMMITTED WINNER (best dev score): {winner['strategy']} [{winner['mode']}]")
+print(f"  dev_score {winner['dev_score']:+.3f}  ->  holdout return {winner['total_return']:+.1%}, "
+      f"excess vs B&H {winner['excess_return']:+.1%}, Sharpe {winner['sharpe']:.2f}")
+print(f"\nWinner's-curse check: Spearman(dev_score, holdout_excess) = {rank_corr:+.3f}")
+print(f"  (~0 / negative => holdout rank is mostly noise; the holdout 'max' "
+      f"{holdout_max['strategy']} [{holdout_max['mode']}] {holdout_max['excess_return']:+.1%}")
+print( "   would be a luck-driven pick, which is exactly why we do NOT select on it.)")
 
 def add_outcome(frame):
     f = frame.copy()
@@ -629,20 +646,22 @@ def add_outcome(frame):
     f["vs_bh_x"] = f["vs_bh_x"].map(lambda x: f"{x:.2f}x" if pd.notna(x) else "n/a")
     return f
 
-cols = ["strategy","type","mode","total_return","excess_return","vs_bh_x",
-        "outcome","sharpe","max_drawdown","calmar","n_trades"]
-print("Holdout leaderboard (ranked by EXCESS return vs Buy & Hold):")
-add_outcome(lb)[cols].head(15)
+cols = ["strategy","type","mode","dev_score","total_return","excess_return","vs_bh_x",
+        "outcome","sharpe","max_drawdown"]
+print("\nDIAGNOSTIC ONLY — full holdout table sorted by holdout excess (NOT how the")
+print("winner was chosen). The dev_score column is the actual selection criterion:")
+add_outcome(lb).sort_values("excess_return", ascending=False)[cols].head(15)
 """)
 
 code(r"""
-# ── Equity curves — top strategies vs B&H ────────────────────────────────────
+# ── Equity curves — pre-committed winner + dev top-5 vs B&H ──────────────────
 def _bt(key, sig):
     funding = CFG.short_funding_bps_per_bar if key.endswith("long_short") else 0.0
     return backtest(sig, hold_ret, CFG.cost_bps_per_side, funding)
 
-ranked_keys = sorted(signals.items(),
-                     key=lambda kv: _bt(*kv)["equity"].iloc[-1], reverse=True)
+# rank by DEV score (selection order), not holdout outcome
+ranked_keys = [(r["key"], signals[r["key"]]) for _, r in cand.iterrows()
+               if r["key"] in signals]
 
 named = {"BUY & HOLD": buy_and_hold(hold_ret, CFG.cost_bps_per_side)}
 for key, sig in ranked_keys[:5]:
@@ -655,7 +674,7 @@ for name, bt_df in named.items():
     ls = "--" if "BUY" in name else "-"
     axes[0].plot(bt_df.index, bt_df["equity"], label=name, lw=lw, ls=ls)
 axes[0].set_yscale("log"); axes[0].set_ylabel("equity (log, $1 start)")
-axes[0].set_title("Holdout equity curves — top-5 strategies vs Buy & Hold (net of costs)",
+axes[0].set_title("Holdout equity — dev-selected top-5 (by dev score) vs Buy & Hold (net of costs)",
                   fontweight="bold")
 axes[0].legend(fontsize=7.5)
 
@@ -720,17 +739,17 @@ def mult_str(row):
     return f"{row['vs_bh_x']:.2f}× B&H" if pd.notna(row["vs_bh_x"]) else "×B&H n/a (a loss → ratio misleading)"
 
 for mode in ("long_only", "long_short"):
-    w = best_of(mode)
+    w = best_of(mode)   # lb is dev-sorted -> this is the dev-selected pick for the mode
     if w is None: continue
-    print(f"[{mode}] top by alpha: {w['strategy']}")
+    print(f"[{mode}] dev-selected winner: {w['strategy']}  (dev_score {w['dev_score']:+.3f})")
     print(f"  return {w['total_return']:.1%}  vs  B&H {bh_row['total_return']:.1%}   "
           f"→  EXCESS {w['excess_return']:+.1%}  ({mult_str(w)})  {verdict(w)}")
     print(f"  Sharpe {w['sharpe']:.2f}  maxDD {w['max_drawdown']:.1%}  "
           f"Calmar {w['calmar']:.2f}  wins {w['win_rate']:.1%}  trades {int(w['n_trades'])}\n")
 
-# best overall
-best_key  = ranked_keys[0][0]
-best_sig  = ranked_keys[0][1]
+# best overall = the single highest-dev config (frozen before holdout)
+best_key  = cand.iloc[0]["key"]
+best_sig  = signals[best_key]
 funding   = CFG.short_funding_bps_per_bar if best_key.endswith("long_short") else 0.0
 best_bt   = backtest(best_sig, hold_ret, CFG.cost_bps_per_side, funding)
 """)
@@ -921,52 +940,51 @@ Key caveats to read alongside the verdict below:
 - **Buy & hold of SOL since 2020 is an extraordinary benchmark (~215×).** The realistic
   win for a timing strategy is better **risk-adjusted return** (Sharpe / Calmar / smaller
   drawdown), which it can achieve by sitting out crashes.
-- All numbers from the **once-touched holdout** — nothing was optimised against it.
+- **The winner is pre-committed on the dev score, then the holdout is read once.**
+  We never pick the model by its holdout return — with ~24 candidates the holdout
+  maximum is winner's-curse luck. If `Spearman(dev, holdout)` is near zero (it is on
+  this small sample), the holdout ranking carries little signal and the honest
+  conclusion is whatever the *dev-selected* model does out-of-sample.
 - Fees + slippage included; the cost-sweep shows how much edge remains at higher costs.
-- ~1.9k daily bars is small: prefer stable, simple configs and treat the null-test
-  p-value and bootstrap CIs as the honest confidence check.
+- ~1.9k daily bars / a single 254-bar holdout is small: treat the null-test p-value
+  and bootstrap CIs as the confidence check, and remember they describe the
+  pre-committed winner, not a cherry-picked one.
 - **Read excess WITH absolute return.** Excess (return points vs B&H) is always
   meaningful, but the `× B&H` growth-multiple is only shown when *both* the strategy
-  and B&H finished in profit — otherwise it is misleading (it explodes when B&H is
-  negative, and makes a money-losing strategy that "fell less" look like a winner).
-  A strategy is only crowned a winner here if it is **profitable AND beats B&H**.
+  and B&H finished in profit — otherwise it is misleading. A strategy is only crowned
+  a winner if it is **profitable AND beats B&H**.
 """)
 
 code(r"""
 print("="*72)
-print("FINAL VERDICT  (holdout, net of costs)")
+print("FINAL VERDICT  (holdout, net of costs — winner PRE-COMMITTED on dev score)")
 print("="*72)
 print(f"Buy & Hold      : return {bh_row['total_return']:>8.1%} | excess  +0.0% | "
       f"Sharpe {bh_row['sharpe']:>5.2f} | maxDD {bh_row['max_drawdown']:>7.1%}")
 for mode in ("long_only", "long_short"):
-    w = best_of(mode)
+    w = best_of(mode)   # highest dev score in the mode (lb is dev-sorted)
     if w is None: continue
-    # a flag PER condition so 'beat B&H' (relative) and 'made money' (absolute) never blur
     tag = ("BEATS+PROFIT ✓" if (w["beats_bh"] and w["profitable"]) else
            "BEATS but LOST $ ✗" if w["beats_bh"] else
            "PROFIT, trails ✗" if w["profitable"] else "lost+trails ✗")
-    print(f"Best {mode:<12}: return {w['total_return']:>8.1%} | excess {w['excess_return']:>+6.1%} | "
+    print(f"Dev-pick {mode:<11}: return {w['total_return']:>8.1%} | excess {w['excess_return']:>+6.1%} | "
           f"Sharpe {w['sharpe']:>5.2f} | maxDD {w['max_drawdown']:>7.1%}  "
-          f"{tag}  <- {w['strategy']}")
-ov = lb.iloc[0]   # leaderboard is sorted by excess_return
-mult = f"{ov['vs_bh_x']:.2f}× B&H" if pd.notna(ov['vs_bh_x']) else "× n/a (loss → ratio misleading)"
+          f"{tag}  <- {w['strategy']} (dev {w['dev_score']:+.3f})")
+win = cand.iloc[0]   # single best dev config overall = the honest headline
+mult = f"{win['vs_bh_x']:.2f}× B&H" if pd.notna(win['vs_bh_x']) else "× n/a (loss → ratio misleading)"
 print("-"*72)
-print(f"Biggest alpha over B&H  : {ov['strategy']} [{ov['mode']}] = "
-      f"{ov['excess_return']:+.1%} excess  ({mult}, "
-      f"total {ov['total_return']:.1%}, Sharpe {ov['sharpe']:.2f})")
-# the headline 'winner' must clear BOTH bars: real profit AND beating B&H
-real = lb[(lb.type != "benchmark") & lb["beats_bh"] & lb["profitable"]]
-if len(real):
-    win = real.iloc[0]
-    print(f"==> RECOMMENDED winner    : {win['strategy']} [{win['mode']}] — "
-          f"{win['total_return']:.1%} return, {win['excess_return']:+.1%} vs B&H, "
-          f"Sharpe {win['sharpe']:.2f}  (profitable AND beats B&H)")
-else:
-    print("==> No strategy was BOTH profitable AND ahead of B&H on the holdout — "
-          "buy & hold wins this window.")
-best_shp = lb[lb.type != "benchmark"].sort_values("sharpe", ascending=False).iloc[0]
-print(f"Best risk-adjusted      : {best_shp['strategy']} [{best_shp['mode']}] "
-      f"= Sharpe {best_shp['sharpe']:.2f} (excess {best_shp['excess_return']:+.1%})")
+print(f"==> HONEST WINNER (best dev score): {win['strategy']} [{win['mode']}]")
+print(f"    holdout {win['excess_return']:+.1%} excess ({mult}, total {win['total_return']:.1%}, "
+      f"Sharpe {win['sharpe']:.2f})  {'beats B&H + profit ✓' if (win['beats_bh'] and win['profitable']) else 'does NOT clear both bars ✗'}")
+print(f"    Spearman(dev, holdout excess) = {rank_corr:+.3f}  "
+      f"(near 0 => out-of-sample edge is not established on this sample)")
+# diagnostic only — the lucky holdout maximum we deliberately did NOT pick
+hm = holdout_max
+print(f"[diagnostic] holdout MAX (not selected): {hm['strategy']} [{hm['mode']}] "
+      f"{hm['excess_return']:+.1%} excess, dev {hm['dev_score']:+.3f}")
+best_shp = cand.sort_values("sharpe", ascending=False).iloc[0]
+print(f"[diagnostic] best holdout Sharpe       : {best_shp['strategy']} [{best_shp['mode']}] "
+      f"= {best_shp['sharpe']:.2f} (excess {best_shp['excess_return']:+.1%})")
 print("="*72)
 print(f"\nNull-test p-value       : {null['p_value']:.3f}  "
       f"{'(edge likely real)' if null['p_value'] < 0.05 else '(edge NOT significant at 5%)'}")

@@ -167,7 +167,7 @@ def final_leaderboard(data, ml_results: dict, rules_results: dict, feature_sets:
         m = perf_metrics(backtest(sig, hold_ret, cfg.cost_bps_per_side, funding),
                          cfg.periods_per_year)
         attrs = res.get("best_attrs") or {}
-        entries.append({"strategy": name, "type": "ml", "mode": mode,
+        entries.append({"strategy": name, "type": "ml", "mode": mode, "key": key,
                         "dev_score": res["best_score"],
                         "dev_mean_excess": attrs.get("mean_excess_return"),
                         "dev_mean_return": attrs.get("mean_return"),
@@ -183,18 +183,22 @@ def final_leaderboard(data, ml_results: dict, rules_results: dict, feature_sets:
                              cfg.periods_per_year)
             key = f"{row['rule']}({row['params']})__{mode}"
             entries.append({"strategy": f"{row['rule']} {row['params']}", "type": "rule",
-                            "mode": mode, "dev_score": row["score"],
+                            "mode": mode, "key": key, "dev_score": row["score"],
                             "dev_mean_excess": row.get("mean_excess_return"),
                             "dev_mean_return": row["mean_return"], **m, **_vs_bh(m)})
             signals[key] = sig
 
     entries.append({"strategy": "BUY & HOLD", "type": "benchmark", "mode": "long_only",
-                    "dev_score": np.nan, "dev_mean_excess": np.nan,
+                    "key": "BUY & HOLD", "dev_score": np.nan, "dev_mean_excess": np.nan,
                     "dev_mean_return": np.nan, **bh,
                     "excess_return": 0.0, "vs_bh_x": 1.0,
                     "profitable": bool(bh_ret > 0), "beats_bh": False})
 
+    # Ranked by DEV score — the ONLY legitimate selection criterion (it never
+    # touches the holdout). Holdout columns are the out-of-sample CONSEQUENCE of
+    # that pick, never the basis for it: sorting by holdout excess and crowning
+    # the max is selection-on-test (winner's curse) and is deliberately avoided.
     lb = (pd.DataFrame(entries)
-          .sort_values("excess_return", ascending=False)
+          .sort_values("dev_score", ascending=False, na_position="last")
           .reset_index(drop=True))
     return lb, signals

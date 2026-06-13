@@ -73,16 +73,26 @@ def main(force: bool = False):
         print(f"      ({i}/{len(ML_MODELS)}) {name}: {time.time()-t:.0f}s", flush=True)
     ml_results = stage_ml(data, fsets, ML_MODELS, CFG, force=False)
 
-    print("[5/5] final one-shot holdout leaderboard ...", flush=True)
+    print("[5/5] holdout evaluation (winner pre-selected on DEV score) ...", flush=True)
     lb, _ = final_leaderboard(data, ml_results, rules, fsets, CFG)
     bh = lb[lb.strategy == "BUY & HOLD"].iloc[0]
-    best_strat = lb[lb.type != "benchmark"].iloc[0]   # sorted by excess_return
+    cand = lb[lb.type != "benchmark"]
+    winner = cand.iloc[0]                       # lb is sorted by dev_score -> honest pick
+    # winner's-curse diagnostic: does dev rank predict the holdout at all?
+    dev = cand["dev_score"].to_numpy(dtype=float)
+    oos = cand["excess_return"].to_numpy(dtype=float)
+    rank_corr = float(pd.Series(dev).corr(pd.Series(oos), method="spearman"))
+    holdout_max = cand.sort_values("excess_return", ascending=False).iloc[0]
+
     summary = {
         "leaderboard": lb.to_dict(orient="records"),
         "buy_hold_return": float(bh["total_return"]),
         "buy_hold_sharpe": float(bh["sharpe"]),
-        "best_by_excess": best_strat.to_dict(),
-        "best_excess_return": float(best_strat["excess_return"]),
+        "selection": "winner pre-committed by DEV score; holdout touched once as OOS check",
+        "winner_by_dev": winner.to_dict(),
+        "winner_excess_return": float(winner["excess_return"]),
+        "dev_oos_spearman": rank_corr,
+        "holdout_max_excess_diagnostic": holdout_max.to_dict(),
         "elapsed_sec": round(time.time() - t0, 1),
     }
     (CFG.results_dir / "summary.json").write_text(
@@ -90,18 +100,24 @@ def main(force: bool = False):
 
     print(f"\nDONE in {time.time()-t0:.0f}s")
     print(f"Buy & Hold holdout return: {bh['total_return']:.1%} (Sharpe {bh['sharpe']:.2f})")
-    print("\nTop 8 by holdout EXCESS return vs Buy & Hold:")
-    disp = lb.head(8).copy()
-    # outcome makes the relative-vs-absolute distinction explicit so a strategy
-    # that "beats B&H" while still losing money is never read as a winner
+    print(f"\nHONEST WINNER (highest DEV score, frozen before holdout):")
+    print(f"  {winner['strategy']} [{winner['mode']}]  dev_score={winner['dev_score']:+.3f}")
+    print(f"  -> holdout: return {winner['total_return']:+.1%}, excess vs B&H "
+          f"{winner['excess_return']:+.1%}, Sharpe {winner['sharpe']:.2f}")
+    print(f"\nWinner's-curse check: Spearman(dev_score, holdout_excess) = {rank_corr:+.3f}")
+    print(f"  (~0 or negative => holdout rank is noise; the {holdout_max['strategy']} "
+          f"[{holdout_max['mode']}] {holdout_max['excess_return']:+.1%} 'max' is luck, "
+          f"NOT a fair pick)")
+    print("\nDiagnostic — full holdout leaderboard (NOT the selection criterion):")
+    disp = lb.copy()
     disp["outcome"] = np.where(disp["beats_bh"] & disp["profitable"], "beats B&H + profit",
                        np.where(disp["beats_bh"], "beats B&H but LOST $",
                        np.where(disp["profitable"], "profit but trails B&H", "lost $ + trails")))
-    # "× B&H" is undefined (NaN) unless both legs are profitable -> show as "n/a"
     disp["vs_bh_x"] = disp["vs_bh_x"].map(lambda x: f"{x:.2f}x" if pd.notna(x) else "n/a")
-    cols = ["strategy", "mode", "total_return", "excess_return", "vs_bh_x",
-            "sharpe", "max_drawdown", "n_trades", "outcome"]
-    print(disp[cols].to_string(index=False))
+    disp = disp.sort_values("excess_return", ascending=False)
+    cols = ["strategy", "mode", "dev_score", "total_return", "excess_return", "vs_bh_x",
+            "sharpe", "outcome"]
+    print(disp[cols].head(8).to_string(index=False))
 
 
 if __name__ == "__main__":
