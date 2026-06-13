@@ -58,6 +58,25 @@ def bh_fold_metrics(ret: pd.Series, folds, cost_bps: float, ppy: int = 365) -> l
     return [perf_metrics(buy_and_hold(ret.iloc[va], cost_bps), ppy) for _, va in folds]
 
 
+def precompute_study_arrays(X: pd.DataFrame, fwd_returns: dict[int, pd.Series], folds) -> dict:
+    """Materialise everything that is constant across an entire study's trials:
+    the feature matrix and per-horizon forward returns as raw numpy arrays sliced
+    per fold. Trials then index columns by integer position instead of rebuilding
+    DataFrames via .iloc/.loc on every fit — identical results, far less overhead.
+    """
+    col_pos = {c: i for i, c in enumerate(X.columns)}
+    Xnp = X.to_numpy()
+    index = X.index
+    fr_np = {h: fr.to_numpy() for h, fr in fwd_returns.items()}
+    fold_arrays = []
+    for tr, va in folds:
+        fold_arrays.append({
+            "Xtr": Xnp[tr], "Xva": Xnp[va], "va_index": index[va],
+            "fr_tr": {h: arr[tr] for h, arr in fr_np.items()},
+        })
+    return {"col_pos": col_pos, "folds": fold_arrays}
+
+
 def _build_fold_stat(m: dict, bh_m: dict) -> dict:
     """Compute all per-fold metrics in one place."""
     excess = m["total_return"] - bh_m["total_return"]
@@ -136,38 +155,45 @@ def ml_eval_config(model_name: str, model_params: dict, strat: dict, X: pd.DataF
                    fwd_returns: dict[int, pd.Series], ret: pd.Series, folds,
                    feature_sets: dict[str, list[str]], cost_bps: float,
                    short_funding_bps: float, mode: str, seed: int = 42,
-                   ppy: int = 365, report_cb=None, bh_folds: list[dict] | None = None) -> dict:
+                   ppy: int = 365, report_cb=None, bh_folds: list[dict] | None = None,
+                   study_arrays: dict | None = None) -> dict:
     """Train per fold, map P(up) -> positions, backtest net of costs.
 
-    `bh_folds` (optional): precomputed per-fold B&H metrics — see bh_fold_metrics().
+    `bh_folds`     (optional): precomputed per-fold B&H metrics — see bh_fold_metrics().
+    `study_arrays` (optional): precomputed numpy feature/label slices — see
+                   precompute_study_arrays(); avoids per-trial DataFrame rebuilds.
     """
     h = strat["horizon"]
     band = 0.0 if model_name in SEQ_ARCHS else strat.get("band", 0.0)
     cols = feature_sets[strat["feature_set"]]
-    fr = fwd_returns[h]
     funding = short_funding_bps if mode == "long_short" else 0.0
     if bh_folds is None:
         bh_folds = bh_fold_metrics(ret, folds, cost_bps, ppy)
+    if study_arrays is None:
+        study_arrays = precompute_study_arrays(X, fwd_returns, folds)
+    col_pos = study_arrays["col_pos"]
+    cols_idx = [col_pos[c] for c in cols]
 
     fold_stats, running = [], []
     for fold_i, (tr, va) in enumerate(folds):
-        fr_tr = fr.iloc[tr]
-        mask = fr_tr.notna() & (fr_tr.abs() > band)
-        if mask.sum() < 50 or fr_tr[mask].gt(0).nunique() < 2:
+        fa = study_arrays["folds"][fold_i]
+        fr_tr = fa["fr_tr"][h]                      # numpy array over train rows
+        notna = ~np.isnan(fr_tr)
+        mask = notna & (np.abs(fr_tr) > band)
+        if mask.sum() < 50 or len(np.unique(fr_tr[mask] > 0)) < 2:
             return {"score": -np.inf, "error": "degenerate training labels"}
         if model_name not in SEQ_ARCHS:
-            Xtr = X.iloc[tr].loc[mask.values, cols]
-            ytr = (fr_tr[mask] > 0).astype(int).values
+            Xtr = fa["Xtr"][mask][:, cols_idx]
+            ytr = (fr_tr[mask] > 0).astype(int)
         else:
-            valid = fr_tr.notna().values
-            last = int(valid.nonzero()[0][-1]) + 1 if valid.any() else 0
-            Xtr = X.iloc[tr][cols].iloc[:last]
-            ytr = (fr_tr.iloc[:last] > 0).astype(int).values
+            last = int(np.nonzero(notna)[0][-1]) + 1 if notna.any() else 0
+            Xtr = fa["Xtr"][:last][:, cols_idx]
+            ytr = (fr_tr[:last] > 0).astype(int)
 
         model = make_model(model_name, model_params, seed)
-        model.fit(Xtr.values, ytr)
-        p_up = pd.Series(model.predict_proba(X.iloc[va][cols].values)[:, 1],
-                         index=X.index[va])
+        model.fit(Xtr, ytr)
+        p_up = pd.Series(model.predict_proba(fa["Xva"][:, cols_idx])[:, 1],
+                         index=fa["va_index"])
         signal = proba_to_signal(p_up, mode=mode, sizing=strat["sizing"],
                                  thr_long=strat.get("thr_long", 0.55),
                                  thr_short=strat.get("thr_short", 0.45),
@@ -292,7 +318,8 @@ def run_study(model_name: str, mode: str, X, fwd_returns, ret, folds, feature_se
 
     n_trials = n_trials or TRIAL_BUDGET[model_name]
     set_names = list(feature_sets.keys())
-    bh_folds = bh_fold_metrics(ret, folds, cost_bps, ppy)   # benchmark once for the whole study
+    bh_folds = bh_fold_metrics(ret, folds, cost_bps, ppy)        # benchmark once
+    study_arrays = precompute_study_arrays(X, fwd_returns, folds)  # numpy slices once
     optuna.logging.set_verbosity(optuna.logging.WARNING)
 
     def objective(trial):
@@ -306,7 +333,8 @@ def run_study(model_name: str, mode: str, X, fwd_returns, ret, folds, feature_se
 
         res = ml_eval_config(model_name, mparams, strat, X, fwd_returns, ret, folds,
                              feature_sets, cost_bps, short_funding_bps, mode,
-                             seed=seed, ppy=ppy, report_cb=cb, bh_folds=bh_folds)
+                             seed=seed, ppy=ppy, report_cb=cb, bh_folds=bh_folds,
+                             study_arrays=study_arrays)
         trial.set_user_attr("mean_excess_return", res.get("mean_excess_return"))
         trial.set_user_attr("mean_return", res.get("mean_return"))
         trial.set_user_attr("mean_sharpe", res.get("mean_sharpe"))
