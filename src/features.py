@@ -168,7 +168,7 @@ def build_features(df: pd.DataFrame,
 
     # ── alt oscillators ────────────────────────────────────────────────────
     wr14 = williams_r(df, 14)
-    add("alt_oscillator", "wr_14",  wr14 / 100)          # normalise to [-1, 0]
+    add("alt_oscillator", "wr_14",  wr14)                # already in [-1, 0]
     add("alt_oscillator", "cci_14", cci(df, 14).clip(-3, 3) / 3)
     add("alt_oscillator", "cci_21", cci(df, 21).clip(-3, 3) / 3)
 
