@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .backtest import backtest, buy_and_hold, proba_to_signal, vol_target_scale
+from .backtest import backtest, buy_and_hold, proba_to_signal
 from .config import CFG, Config
 from .cv import PurgedWalkForward, dev_holdout_split, holdout_windows
 from .data_io import load_prices, load_btc_data
@@ -127,16 +127,10 @@ def holdout_signal_ml(data, model_name: str, flat_params: dict, mode: str,
     model = make_model(model_name, mparams, cfg.seed)
     model.fit(Xtr.values, ytr)
     p = pd.Series(model.predict_proba(X.iloc[hold][cols].values)[:, 1], index=X.index[hold])
-    signal = proba_to_signal(p, mode=mode, sizing=strat["sizing"],
-                             thr_long=strat.get("thr_long", 0.55),
-                             thr_short=strat.get("thr_short", 0.45),
-                             scale=strat.get("scale", 0.2))
-    if strat.get("vol_target"):
-        # full-history returns so rolling vol has warmup before the holdout starts
-        vt = vol_target_scale(data["ret"], strat["target_vol"], strat["vol_win"],
-                              ppy=cfg.periods_per_year)
-        signal = (signal * vt.reindex(signal.index)).clip(-1, 1)
-    return signal
+    return proba_to_signal(p, mode=mode, sizing=strat["sizing"],
+                           thr_long=strat.get("thr_long", 0.55),
+                           thr_short=strat.get("thr_short", 0.45),
+                           scale=strat.get("scale", 0.2))
 
 
 def holdout_signal_rule(data, rule_name: str, params: dict, mode: str) -> pd.Series:
