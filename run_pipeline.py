@@ -28,6 +28,24 @@ from src.pipeline import (load_dataset, stage_rules, stage_feature_sets, stage_m
                           final_leaderboard)
 
 
+def _json_safe(o):
+    """Recursively coerce numpy scalars and non-finite floats (NaN/inf -> null)
+    so summary.json is valid, strict-parseable JSON."""
+    if isinstance(o, dict):
+        return {k: _json_safe(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [_json_safe(v) for v in o]
+    if isinstance(o, np.bool_):
+        return bool(o)
+    if isinstance(o, np.integer):
+        return int(o)
+    if isinstance(o, np.floating):
+        o = float(o)
+    if isinstance(o, float):
+        return o if np.isfinite(o) else None
+    return o
+
+
 def main(force: bool = False):
     t0 = time.time()
     print("[1/5] loading dataset + features ...", flush=True)
@@ -67,7 +85,8 @@ def main(force: bool = False):
         "best_excess_return": float(best_strat["excess_return"]),
         "elapsed_sec": round(time.time() - t0, 1),
     }
-    (CFG.results_dir / "summary.json").write_text(json.dumps(summary, indent=2, default=str))
+    (CFG.results_dir / "summary.json").write_text(
+        json.dumps(_json_safe(summary), indent=2, default=str, allow_nan=False))
 
     print(f"\nDONE in {time.time()-t0:.0f}s")
     print(f"Buy & Hold holdout return: {bh['total_return']:.1%} (Sharpe {bh['sharpe']:.2f})")

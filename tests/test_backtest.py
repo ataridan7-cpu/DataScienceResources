@@ -48,6 +48,16 @@ def test_costs_charged_on_turnover():
     assert pricey["total_return"] < cheap["total_return"]
 
 
+def test_equity_stays_nonnegative_on_extreme_loss():
+    # a -150% bar against a unit short would flip equity negative without a floor
+    idx = pd.date_range("2021-01-01", periods=4, freq="D", tz="UTC")
+    ret = pd.Series([0.0, 1.5, 0.0, 0.0], index=idx)   # +150% asset move on bar 1
+    short = pd.Series([-1.0, -1.0, -1.0, -1.0], index=idx)
+    bt = backtest(short, ret, cost_bps=0.0)
+    assert (bt["equity"] >= 0).all()                    # floored, never sign-flips
+    assert bt["strat_ret"].min() >= -1.0
+
+
 def test_proba_to_signal_modes():
     p = pd.Series([0.2, 0.5, 0.8], index=range(3))
     lo = proba_to_signal(p, mode="long_only", sizing="binary", thr_long=0.55)
@@ -60,6 +70,7 @@ def test_proba_to_signal_modes():
 
 if __name__ == "__main__":
     for fn in [test_always_long_zero_cost_equals_buy_hold, test_execution_lag_no_lookahead,
-               test_costs_charged_on_turnover, test_proba_to_signal_modes]:
+               test_costs_charged_on_turnover, test_equity_stays_nonnegative_on_extreme_loss,
+               test_proba_to_signal_modes]:
         fn()
     print("backtest tests passed")

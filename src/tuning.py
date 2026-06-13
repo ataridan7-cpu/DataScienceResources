@@ -105,10 +105,16 @@ def ml_eval_config(model_name: str, model_params: dict, strat: dict, X: pd.DataF
         mask = fr_tr.notna() & (fr_tr.abs() > band)
         if mask.sum() < 50 or fr_tr[mask].gt(0).nunique() < 2:
             return {"score": -np.inf, "error": "degenerate training labels"}
-        Xtr = X.iloc[tr].loc[mask.values, cols] if model_name not in SEQ_ARCHS \
-            else X.iloc[tr][cols]          # seq nets need contiguous rows
-        ytr = (fr_tr[mask] > 0).astype(int).values if model_name not in SEQ_ARCHS \
-            else (fr_tr.fillna(0) > 0).astype(int).values
+        if model_name not in SEQ_ARCHS:
+            Xtr = X.iloc[tr].loc[mask.values, cols]
+            ytr = (fr_tr[mask] > 0).astype(int).values
+        else:
+            # seq nets need contiguous rows; keep them in order but truncate the
+            # trailing rows whose forward label is undefined (don't mislabel as 0)
+            valid = fr_tr.notna().values
+            last = int(valid.nonzero()[0][-1]) + 1 if valid.any() else 0
+            Xtr = X.iloc[tr][cols].iloc[:last]
+            ytr = (fr_tr.iloc[:last] > 0).astype(int).values
 
         model = make_model(model_name, model_params, seed)
         model.fit(Xtr.values, ytr)

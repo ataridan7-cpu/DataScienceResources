@@ -26,7 +26,9 @@ def backtest(signal: pd.Series, ret: pd.Series, cost_bps: float = 20.0,
     turnover = pos.diff().abs().fillna(pos.abs())  # first bar entry counts
     cost = turnover * cost_bps / 1e4
     funding = np.where(pos < 0, short_funding_bps / 1e4 * pos.abs(), 0.0)
-    strat_ret = pos * ret - cost - funding
+    # an unleveraged bar cannot lose more than the capital committed to it;
+    # flooring at -1 keeps equity non-negative (cumprod can't flip sign)
+    strat_ret = (pos * ret - cost - funding).clip(lower=-1.0)
     equity = (1 + strat_ret).cumprod()
     return pd.DataFrame({
         "position": pos, "turnover": turnover, "cost": cost,
