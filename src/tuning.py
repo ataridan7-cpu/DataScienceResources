@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .backtest import backtest, buy_and_hold, proba_to_signal
+from .backtest import backtest, buy_and_hold, proba_to_signal, vol_target_scale
 from .metrics import perf_metrics
 from .models import RULES, make_model
 
@@ -173,6 +173,10 @@ def ml_eval_config(model_name: str, model_params: dict, strat: dict, X: pd.DataF
         study_arrays = precompute_study_arrays(X, fwd_returns, folds)
     col_pos = study_arrays["col_pos"]
     cols_idx = [col_pos[c] for c in cols]
+    # vol-targeting multiplier (computed once on the full dev returns so rolling
+    # vol has history at every fold boundary; sliced per fold below)
+    vt = (vol_target_scale(ret, strat["target_vol"], strat["vol_win"], ppy=ppy)
+          if strat.get("vol_target") else None)
 
     fold_stats, running = [], []
     for fold_i, (tr, va) in enumerate(folds):
@@ -198,6 +202,8 @@ def ml_eval_config(model_name: str, model_params: dict, strat: dict, X: pd.DataF
                                  thr_long=strat.get("thr_long", 0.55),
                                  thr_short=strat.get("thr_short", 0.45),
                                  scale=strat.get("scale", 0.2))
+        if vt is not None:
+            signal = (signal * vt.reindex(signal.index)).clip(-1, 1)
         m    = perf_metrics(backtest(signal, ret.iloc[va], cost_bps, funding), ppy)
         fs   = _build_fold_stat(m, bh_folds[fold_i])
         fold_stats.append(fs)
@@ -236,6 +242,13 @@ def _suggest_strategy(trial, mode: str, model_name: str, set_names: list[str]) -
     elif strat["sizing"] == "scaled":
         strat["scale"] = trial.suggest_float("scale", 0.05, 0.5)
     # kelly: no extra params — size is determined by 2p-1
+    # volatility targeting: an orthogonal exposure layer. When on, the directional
+    # signal is scaled by target_vol / realized_vol — exploits the one robustly
+    # predictable thing (vol clustering) to cut exposure into crashes.
+    strat["vol_target"] = trial.suggest_categorical("vol_target", [False, True])
+    if strat["vol_target"]:
+        strat["target_vol"] = trial.suggest_float("target_vol", 0.3, 1.0)
+        strat["vol_win"]    = trial.suggest_categorical("vol_win", [10, 21, 42])
     return strat
 
 
@@ -291,7 +304,8 @@ def _suggest_model(trial, name: str) -> dict:
     raise ValueError(name)
 
 
-_STRATEGY_KEYS = {"horizon", "band", "sizing", "thr_long", "thr_short", "scale", "feature_set"}
+_STRATEGY_KEYS = {"horizon", "band", "sizing", "thr_long", "thr_short", "scale", "feature_set",
+                  "vol_target", "target_vol", "vol_win"}
 
 
 def split_params(flat: dict) -> tuple[dict, dict]:

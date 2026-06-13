@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .backtest import backtest, buy_and_hold, proba_to_signal
+from .backtest import backtest, buy_and_hold, proba_to_signal, vol_target_scale
 from .config import CFG, Config
 from .cv import PurgedWalkForward, dev_holdout_split, holdout_windows
 from .data_io import load_prices, load_btc_data
@@ -113,8 +113,12 @@ def holdout_signal_ml(data, model_name: str, flat_params: dict, mode: str,
     dev, hold = data["dev_idx"], data["hold_idx"]
     fr_dev = fwd.iloc[dev]
     if model_name in SEQ_ARCHS:
-        Xtr = X.iloc[dev][cols]
-        ytr = (fr_dev.fillna(0) > 0).astype(int).values
+        # truncate trailing rows whose forward label is undefined (match CV training;
+        # don't mislabel them as "down" via fillna(0))
+        valid = fr_dev.notna().values
+        last = int(valid.nonzero()[0][-1]) + 1 if valid.any() else 0
+        Xtr = X.iloc[dev][cols].iloc[:last]
+        ytr = (fr_dev.iloc[:last] > 0).astype(int).values
     else:
         mask = fr_dev.notna() & (fr_dev.abs() > band)
         Xtr = X.iloc[dev].loc[mask.values, cols]
@@ -123,10 +127,16 @@ def holdout_signal_ml(data, model_name: str, flat_params: dict, mode: str,
     model = make_model(model_name, mparams, cfg.seed)
     model.fit(Xtr.values, ytr)
     p = pd.Series(model.predict_proba(X.iloc[hold][cols].values)[:, 1], index=X.index[hold])
-    return proba_to_signal(p, mode=mode, sizing=strat["sizing"],
-                           thr_long=strat.get("thr_long", 0.55),
-                           thr_short=strat.get("thr_short", 0.45),
-                           scale=strat.get("scale", 0.2))
+    signal = proba_to_signal(p, mode=mode, sizing=strat["sizing"],
+                             thr_long=strat.get("thr_long", 0.55),
+                             thr_short=strat.get("thr_short", 0.45),
+                             scale=strat.get("scale", 0.2))
+    if strat.get("vol_target"):
+        # full-history returns so rolling vol has warmup before the holdout starts
+        vt = vol_target_scale(data["ret"], strat["target_vol"], strat["vol_win"],
+                              ppy=cfg.periods_per_year)
+        signal = (signal * vt.reindex(signal.index)).clip(-1, 1)
+    return signal
 
 
 def holdout_signal_rule(data, rule_name: str, params: dict, mode: str) -> pd.Series:

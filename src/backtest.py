@@ -42,6 +42,20 @@ def buy_and_hold(ret: pd.Series, cost_bps: float = 20.0) -> pd.DataFrame:
     return backtest(sig, ret, cost_bps=cost_bps, short_funding_bps=0.0)
 
 
+def vol_target_scale(ret: pd.Series, target_vol: float = 0.5, window: int = 21,
+                     cap: float = 1.0, ppy: int = 365) -> pd.Series:
+    """Causal volatility-targeting multiplier in [0, cap].
+
+    scale_t = target_vol / realized_vol_t, where realized_vol_t is the annualized
+    trailing std of returns through bar t (known at the close-t decision, so no
+    look-ahead once the backtest applies its standard one-bar execution lag).
+    Exposure shrinks when vol spikes (crashes) and rises when markets are calm.
+    Warmup bars (vol undefined) get 0 → flat, never a NaN position.
+    """
+    rv = ret.rolling(window).std() * np.sqrt(ppy)
+    return (target_vol / rv).clip(upper=cap).fillna(0.0)
+
+
 def proba_to_signal(p_up: pd.Series, mode: str = "long_only", sizing: str = "binary",
                     thr_long: float = 0.55, thr_short: float = 0.45,
                     scale: float = 0.2) -> pd.Series:
