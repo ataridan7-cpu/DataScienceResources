@@ -14,7 +14,7 @@ import pandas as pd
 
 from .backtest import backtest, buy_and_hold, proba_to_signal
 from .metrics import perf_metrics
-from .tuning import score_folds
+from .tuning import score_folds, bh_fold_metrics
 
 BASELINE_LGBM = dict(n_estimators=200, num_leaves=15, learning_rate=0.05,
                      min_child_samples=20, verbosity=-1, class_weight="balanced")
@@ -59,21 +59,25 @@ def permutation_ranking(X: pd.DataFrame, y: pd.Series, folds, cols: list[str],
     return (agg / max(n_used, 1)).sort_values(ascending=False)
 
 
-def _profit_of_set(cols: list[str], X, y, ret, folds, cost_bps, seed) -> float:
-    """Score a feature subset using CFG.scoring objective via baseline LGBM."""
+def _profit_of_set(cols: list[str], X, y, ret, folds, cost_bps, seed,
+                   bh_folds: list[dict] | None = None) -> float:
+    """Score a feature subset using CFG.scoring objective via baseline LGBM.
+
+    `bh_folds`: precomputed per-fold B&H metrics (see tuning.bh_fold_metrics);
+    avoids re-benchmarking on every candidate subset.
+    """
+    if bh_folds is None:
+        bh_folds = bh_fold_metrics(ret, folds, cost_bps, 365)
     fold_stats = []
-    for tr, va in folds:
+    for (tr, va), bh_m in zip(folds, bh_folds):
         ytr = y.iloc[tr]
         m = ytr.notna()
         model = _fit_baseline(X.iloc[tr].loc[m.values, cols], ytr[m].astype(int).values, seed)
         p = pd.Series(model.predict_proba(X.iloc[va][cols].values)[:, 1], index=X.index[va])
         sig = proba_to_signal(p, mode="long_only", sizing="binary", thr_long=0.55)
-        fold_ret = ret.iloc[va]
-        m_strat = perf_metrics(backtest(sig, fold_ret, cost_bps), 365)
-        bh_m    = perf_metrics(buy_and_hold(fold_ret, cost_bps), 365)
-        excess = m_strat["total_return"] - bh_m["total_return"]
+        m_strat = perf_metrics(backtest(sig, ret.iloc[va], cost_bps), 365)
         fold_stats.append({
-            "excess_return":  excess,
+            "excess_return":  m_strat["total_return"] - bh_m["total_return"],
             "sharpe_excess":  m_strat["sharpe"] - bh_m["sharpe"],
             "calmar_excess":  (m_strat.get("calmar", 0.0) or 0.0) - (bh_m.get("calmar", 0.0) or 0.0),
             "sharpe":         m_strat["sharpe"],
@@ -91,6 +95,7 @@ def greedy_forward(X, y, ret, folds, ranked: list[str], cost_bps: float,
     further addition improves OOS profit (up to `max_features`).
     """
     from joblib import Parallel, delayed
+    bh_folds = bh_fold_metrics(ret, folds, cost_bps, 365)   # benchmark once, reuse every candidate
     candidates = ranked[:pool]
     chosen: list[str] = []
     best = -np.inf
@@ -99,7 +104,7 @@ def greedy_forward(X, y, ret, folds, ranked: list[str], cost_bps: float,
         if not pending:
             break
         scores = Parallel(n_jobs=n_jobs, prefer="threads")(
-            delayed(_profit_of_set)(chosen + [c], X, y, ret, folds, cost_bps, seed)
+            delayed(_profit_of_set)(chosen + [c], X, y, ret, folds, cost_bps, seed, bh_folds)
             for c in pending)
         cand, sc = max(zip(pending, scores), key=lambda kv: kv[1])
         if sc <= best + 1e-6 and len(chosen) >= min_features:

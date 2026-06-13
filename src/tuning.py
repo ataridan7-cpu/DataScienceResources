@@ -51,6 +51,13 @@ def score_folds(fold_stats: list[dict]) -> float:
     return float(np.mean(vals)) if vals else -np.inf
 
 
+def bh_fold_metrics(ret: pd.Series, folds, cost_bps: float, ppy: int = 365) -> list[dict]:
+    """Per-fold buy & hold metrics. B&H is always fully long with no funding, so
+    this is identical across every trial and both modes — compute it ONCE and
+    reuse, instead of re-backtesting it inside every Optuna trial."""
+    return [perf_metrics(buy_and_hold(ret.iloc[va], cost_bps), ppy) for _, va in folds]
+
+
 def _build_fold_stat(m: dict, bh_m: dict) -> dict:
     """Compute all per-fold metrics in one place."""
     excess = m["total_return"] - bh_m["total_return"]
@@ -72,13 +79,18 @@ def _build_fold_stat(m: dict, bh_m: dict) -> dict:
 
 
 def eval_signal_on_folds(signal: pd.Series, ret: pd.Series, folds, cost_bps: float,
-                         short_funding_bps: float = 0.0, ppy: int = 365) -> dict:
-    """Backtest signal on each fold test window; score via CFG.scoring objective."""
+                         short_funding_bps: float = 0.0, ppy: int = 365,
+                         bh_folds: list[dict] | None = None) -> dict:
+    """Backtest signal on each fold test window; score via CFG.scoring objective.
+
+    `bh_folds` (optional): precomputed per-fold B&H metrics from bh_fold_metrics();
+    avoids re-running the identical benchmark backtest on every call.
+    """
+    if bh_folds is None:
+        bh_folds = bh_fold_metrics(ret, folds, cost_bps, ppy)
     fold_stats = []
-    for _, va in folds:
-        fold_ret = ret.iloc[va]
-        m     = perf_metrics(backtest(signal.iloc[va], fold_ret, cost_bps, short_funding_bps), ppy)
-        bh_m  = perf_metrics(buy_and_hold(fold_ret, cost_bps), ppy)
+    for (_, va), bh_m in zip(folds, bh_folds):
+        m = perf_metrics(backtest(signal.iloc[va], ret.iloc[va], cost_bps, short_funding_bps), ppy)
         fold_stats.append(_build_fold_stat(m, bh_m))
     excesses = [f["excess_return"] for f in fold_stats]
     rets     = [f["total_return"]  for f in fold_stats]
@@ -100,6 +112,7 @@ def grid_search_rules(df_prices: pd.DataFrame, ret: pd.Series, folds, mode: str,
                       cost_bps: float, short_funding_bps: float, ppy: int = 365) -> pd.DataFrame:
     """Exhaustive grid over every rule family; returns leaderboard sorted by score."""
     funding = short_funding_bps if mode == "long_short" else 0.0
+    bh_folds = bh_fold_metrics(ret, folds, cost_bps, ppy)   # benchmark once, reuse for every combo
     rows = []
     for rname, spec in RULES.items():
         keys = list(spec["grid"].keys())
@@ -108,7 +121,7 @@ def grid_search_rules(df_prices: pd.DataFrame, ret: pd.Series, folds, mode: str,
             if spec["constraint"] and not spec["constraint"](params):
                 continue
             signal = spec["fn"](df_prices, mode=mode, **params).reindex(ret.index)
-            res = eval_signal_on_folds(signal, ret, folds, cost_bps, funding, ppy)
+            res = eval_signal_on_folds(signal, ret, folds, cost_bps, funding, ppy, bh_folds=bh_folds)
             rows.append({"rule": rname, "params": json.dumps(params), **{
                 k: res[k] for k in ("score", "mean_excess_return", "mean_return",
                                     "std_return", "mean_sharpe", "pct_folds_beat_bh",
@@ -123,13 +136,18 @@ def ml_eval_config(model_name: str, model_params: dict, strat: dict, X: pd.DataF
                    fwd_returns: dict[int, pd.Series], ret: pd.Series, folds,
                    feature_sets: dict[str, list[str]], cost_bps: float,
                    short_funding_bps: float, mode: str, seed: int = 42,
-                   ppy: int = 365, report_cb=None) -> dict:
-    """Train per fold, map P(up) -> positions, backtest net of costs."""
+                   ppy: int = 365, report_cb=None, bh_folds: list[dict] | None = None) -> dict:
+    """Train per fold, map P(up) -> positions, backtest net of costs.
+
+    `bh_folds` (optional): precomputed per-fold B&H metrics — see bh_fold_metrics().
+    """
     h = strat["horizon"]
     band = 0.0 if model_name in SEQ_ARCHS else strat.get("band", 0.0)
     cols = feature_sets[strat["feature_set"]]
     fr = fwd_returns[h]
     funding = short_funding_bps if mode == "long_short" else 0.0
+    if bh_folds is None:
+        bh_folds = bh_fold_metrics(ret, folds, cost_bps, ppy)
 
     fold_stats, running = [], []
     for fold_i, (tr, va) in enumerate(folds):
@@ -154,10 +172,8 @@ def ml_eval_config(model_name: str, model_params: dict, strat: dict, X: pd.DataF
                                  thr_long=strat.get("thr_long", 0.55),
                                  thr_short=strat.get("thr_short", 0.45),
                                  scale=strat.get("scale", 0.2))
-        fold_ret = ret.iloc[va]
-        m    = perf_metrics(backtest(signal, fold_ret, cost_bps, funding), ppy)
-        bh_m = perf_metrics(buy_and_hold(fold_ret, cost_bps), ppy)
-        fs   = _build_fold_stat(m, bh_m)
+        m    = perf_metrics(backtest(signal, ret.iloc[va], cost_bps, funding), ppy)
+        fs   = _build_fold_stat(m, bh_folds[fold_i])
         fold_stats.append(fs)
         running.append(fs["excess_return"])
         if report_cb is not None:
@@ -276,6 +292,7 @@ def run_study(model_name: str, mode: str, X, fwd_returns, ret, folds, feature_se
 
     n_trials = n_trials or TRIAL_BUDGET[model_name]
     set_names = list(feature_sets.keys())
+    bh_folds = bh_fold_metrics(ret, folds, cost_bps, ppy)   # benchmark once for the whole study
     optuna.logging.set_verbosity(optuna.logging.WARNING)
 
     def objective(trial):
@@ -289,7 +306,7 @@ def run_study(model_name: str, mode: str, X, fwd_returns, ret, folds, feature_se
 
         res = ml_eval_config(model_name, mparams, strat, X, fwd_returns, ret, folds,
                              feature_sets, cost_bps, short_funding_bps, mode,
-                             seed=seed, ppy=ppy, report_cb=cb)
+                             seed=seed, ppy=ppy, report_cb=cb, bh_folds=bh_folds)
         trial.set_user_attr("mean_excess_return", res.get("mean_excess_return"))
         trial.set_user_attr("mean_return", res.get("mean_return"))
         trial.set_user_attr("mean_sharpe", res.get("mean_sharpe"))
