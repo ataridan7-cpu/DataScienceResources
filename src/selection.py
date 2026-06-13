@@ -60,8 +60,8 @@ def permutation_ranking(X: pd.DataFrame, y: pd.Series, folds, cols: list[str],
 
 
 def _profit_of_set(cols: list[str], X, y, ret, folds, cost_bps, seed) -> float:
-    """Mean OOS fold EXCESS return (vs B&H) of the baseline model on a subset."""
-    excesses = []
+    """Score a feature subset using CFG.scoring objective via baseline LGBM."""
+    fold_stats = []
     for tr, va in folds:
         ytr = y.iloc[tr]
         m = ytr.notna()
@@ -69,10 +69,16 @@ def _profit_of_set(cols: list[str], X, y, ret, folds, cost_bps, seed) -> float:
         p = pd.Series(model.predict_proba(X.iloc[va][cols].values)[:, 1], index=X.index[va])
         sig = proba_to_signal(p, mode="long_only", sizing="binary", thr_long=0.55)
         fold_ret = ret.iloc[va]
-        strat = perf_metrics(backtest(sig, fold_ret, cost_bps), 365)["total_return"]
-        bh = perf_metrics(buy_and_hold(fold_ret, cost_bps), 365)["total_return"]
-        excesses.append(strat - bh)
-    return score_folds(excesses)
+        m_strat = perf_metrics(backtest(sig, fold_ret, cost_bps), 365)
+        bh_m    = perf_metrics(buy_and_hold(fold_ret, cost_bps), 365)
+        excess = m_strat["total_return"] - bh_m["total_return"]
+        fold_stats.append({
+            "excess_return":  excess,
+            "sharpe_excess":  m_strat["sharpe"] - bh_m["sharpe"],
+            "calmar_excess":  (m_strat.get("calmar", 0.0) or 0.0) - (bh_m.get("calmar", 0.0) or 0.0),
+            "sharpe":         m_strat["sharpe"],
+        })
+    return score_folds(fold_stats)
 
 
 def greedy_forward(X, y, ret, folds, ranked: list[str], cost_bps: float,
@@ -120,6 +126,7 @@ def build_feature_sets(X: pd.DataFrame, y: pd.Series, ret: pd.Series, folds,
         "top10": ranked[:10],
         "top15": ranked[:15],
         "top25": ranked[:25],
+        "top30": ranked[:30],
         "greedy": greedy,
     }
     out = {"sets": sets, "ranking": {k: float(v) for k, v in ranking.items()},

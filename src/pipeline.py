@@ -15,7 +15,7 @@ import pandas as pd
 from .backtest import backtest, buy_and_hold, proba_to_signal
 from .config import CFG, Config
 from .cv import PurgedWalkForward, dev_holdout_split, holdout_windows
-from .data_io import load_prices
+from .data_io import load_prices, load_btc_data
 from .features import build_features
 from .labels import forward_return, sign_label
 from .metrics import perf_metrics
@@ -24,7 +24,7 @@ from .selection import build_feature_sets
 from .tuning import (SEQ_ARCHS, eval_signal_on_folds, grid_search_rules,
                      ml_eval_config, run_study, split_params)
 
-HORIZONS = (1, 2, 3, 5)
+HORIZONS = (1, 2, 3, 5, 10, 21)
 MAX_HORIZON = max(HORIZONS)
 
 
@@ -33,7 +33,8 @@ def load_dataset(cfg: Config = CFG) -> dict:
     """Load, clean, feature-engineer and split. Returns everything downstream needs."""
     cfg.ensure_dirs()
     df = load_prices(cfg.raw_csv)
-    X_all, groups = build_features(df)
+    btc = load_btc_data(cfg.processed_dir / "btc.parquet")
+    X_all, groups = build_features(df, btc=btc)
     valid = X_all.dropna().index            # drop indicator warmup rows
     X = X_all.loc[valid]
     prices = df.loc[valid]
@@ -45,7 +46,8 @@ def load_dataset(cfg: Config = CFG) -> dict:
     dev_idx, hold_idx = dev_holdout_split(n, cfg.holdout_frac)
     folds = list(PurgedWalkForward(cfg.n_folds, cfg.min_train_frac,
                                    purge=MAX_HORIZON,
-                                   embargo=cfg.embargo_bars).split(len(dev_idx)))
+                                   embargo=cfg.embargo_bars,
+                                   sliding=cfg.cv_sliding).split(len(dev_idx)))
     return {
         "df": df, "X": X, "prices": prices, "ret": ret, "fwd": fwd, "y1": y1,
         "groups": groups, "dev_idx": dev_idx, "hold_idx": hold_idx, "folds": folds,

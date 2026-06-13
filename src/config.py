@@ -1,5 +1,5 @@
 """Central configuration for the SOL trading research pipeline."""
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -18,18 +18,24 @@ class Config:
     short_funding_bps_per_bar: float = 1.0  # perp funding haircut while short (daily)
 
     # --- cross-validation ---
-    n_folds: int = 5
+    n_folds: int = 6               # 6 folds → better regime coverage than 5
     min_train_frac: float = 0.40   # first walk-forward train window
     embargo_bars: int = 5          # extra gap between train end and test start
     holdout_frac: float = 0.15     # final never-touched test segment
+    cv_sliding: bool = False       # True → fixed-size train window (non-expanding)
+
+    # --- tuning objective ---
+    # excess_return : mean(model_return − B&H) per fold  [old default]
+    # excess_sharpe : mean(model_Sharpe − B&H Sharpe)    [rewards crash avoidance]
+    # sharpe        : mean absolute Sharpe ratio
+    # calmar        : mean(model_Calmar − B&H Calmar)
+    scoring: str = "excess_sharpe"
 
     # --- misc ---
     seed: int = 42
     periods_per_year: int = 365    # crypto trades 7 days/week
 
     # --- parallelism ---
-    # Optuna runs this many trials concurrently; each model is pinned to
-    # `model_threads` internal threads so the two layers don't oversubscribe.
     n_jobs: int = 4                # parallel Optuna workers (= CPU cores)
     model_threads: int = 1         # internal threads per model fit
 

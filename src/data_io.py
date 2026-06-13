@@ -77,6 +77,40 @@ def detect_granularity(df: pd.DataFrame) -> dict:
     }
 
 
+def load_btc_data(cache_path: Path) -> "pd.DataFrame | None":
+    """Download BTC-USD daily OHLCV via yfinance, cache to parquet.
+
+    Returns None gracefully if yfinance is unavailable or download fails.
+    BTC features in build_features() are simply omitted when this returns None.
+    """
+    if cache_path.exists():
+        try:
+            return pd.read_parquet(cache_path)
+        except Exception:
+            pass
+    try:
+        import yfinance as yf
+        btc = yf.download("BTC-USD", start="2019-01-01", progress=False, auto_adjust=True)
+        if btc is None or len(btc) == 0:
+            return None
+        # flatten MultiIndex columns produced by recent yfinance versions
+        if isinstance(btc.columns, pd.MultiIndex):
+            btc.columns = [c[0].lower() for c in btc.columns]
+        else:
+            btc.columns = [c.lower() for c in btc.columns]
+        btc.index = pd.to_datetime(btc.index, utc=True)
+        btc = btc.rename_axis("timestamp").sort_index()
+        for col in ["open", "high", "low", "close", "volume"]:
+            if col not in btc.columns:
+                return None
+        btc = btc[["open", "high", "low", "close", "volume"]].dropna(subset=["close"])
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        btc.to_parquet(cache_path)
+        return btc
+    except Exception:
+        return None
+
+
 def summarize(df: pd.DataFrame) -> pd.DataFrame:
     info = detect_granularity(df)
     return pd.DataFrame({

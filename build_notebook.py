@@ -65,6 +65,7 @@ from src.data_io import load_prices, summarize, detect_granularity
 from src.features import build_features
 from src.labels import forward_return, sign_label
 from src.cv import PurgedWalkForward, dev_holdout_split, holdout_windows
+from src.data_io import load_btc_data
 from src.backtest import backtest, buy_and_hold, proba_to_signal
 from src.metrics import perf_metrics, metrics_table
 from src.models import ML_MODELS, RULES
@@ -81,6 +82,9 @@ plt.rcParams.update({"figure.dpi": 110, "axes.grid": True, "grid.alpha": 0.25,
 CMAP_DIV = LinearSegmentedColormap.from_list("rg", ["#d73027","#f7f7f7","#1a9850"])
 CMAP_SEQ = "YlOrRd"
 print("All imports OK")
+print(f"Active scoring objective : {CFG.scoring}")
+print(f"CV folds / horizons      : {CFG.n_folds} folds, horizons up to 21 bars")
+print(f"Sliding window CV        : {CFG.cv_sliding}")
 """)
 
 # ======================================================= 2. DATA DOWNLOAD
@@ -230,10 +234,14 @@ plt.tight_layout(); plt.show()
 
 # ======================================================= 4. FEATURE ENGINEERING
 md(r"""
-## 4. Feature engineering (48 strictly-causal features)
+## 4. Feature engineering (~70 strictly-causal features)
 
 Every indicator is hand-rolled (no TA-Lib) so causality is **guaranteed and
 unit-tested**. Trend features are price-ratios (stationary), never raw MA levels.
+
+**Feature groups:** returns/momentum (12), trend (11), oscillators (8),
+alt oscillators (3), volatility (14), volume (5), calendar (4),
+**regime (5 new)**, **BTC cross-asset (5 new, when available)**.
 """)
 
 code(r"""
@@ -602,11 +610,12 @@ md(r"""
 ## 10. The moment of truth — honest one-shot holdout evaluation
 
 **Selection rule (critical for honesty):** the winner is the config with the best
-**dev score**, frozen *before* the holdout is touched. The holdout is then read
-**once** as the out-of-sample consequence of that pre-commitment.
+**dev score**, frozen *before* the holdout is touched. Dev score = mean excess Sharpe
+over B&H across CV folds (rewards crash avoidance, not just raw return). The holdout
+is then read **once** as the out-of-sample consequence of that pre-commitment.
 
 We deliberately do **not** run all configs through the holdout and crown the best —
-that is selection-on-test (winner's curse): with ~24 candidates the maximum holdout
+that is selection-on-test (winner's curse): with 20+ candidates the maximum holdout
 return is the luckiest draw, not the best model. The full holdout table is shown
 only as a **diagnostic**, and we report `Spearman(dev_score, holdout_excess)` so you
 can see for yourself whether dev rank carries any out-of-sample information.

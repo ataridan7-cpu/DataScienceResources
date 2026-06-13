@@ -31,33 +31,64 @@ TRIAL_BUDGET = {
 
 
 # ------------------------------------------------------------------ scoring
-def score_folds(fold_returns: list[float]) -> float:
-    """Mean (model_profit − buy_and_hold) across folds — the exact objective."""
-    return float(np.mean(fold_returns))
+def score_folds(fold_stats: list[dict]) -> float:
+    """Dispatch to the active scoring objective (CFG.scoring).
+
+    Each fold_stat dict must contain at least:
+        excess_return, sharpe_excess, calmar_excess
+    Falls back gracefully to excess_return for missing keys.
+    """
+    from .config import CFG
+    scoring = getattr(CFG, "scoring", "excess_return")
+    key = {
+        "excess_return": "excess_return",
+        "excess_sharpe": "sharpe_excess",
+        "sharpe":        "sharpe",
+        "calmar":        "calmar_excess",
+    }.get(scoring, "excess_return")
+    vals = [f.get(key, f.get("excess_return", 0.0)) for f in fold_stats]
+    vals = [v if np.isfinite(v) else 0.0 for v in vals]
+    return float(np.mean(vals)) if vals else -np.inf
+
+
+def _build_fold_stat(m: dict, bh_m: dict) -> dict:
+    """Compute all per-fold metrics in one place."""
+    excess = m["total_return"] - bh_m["total_return"]
+    sharpe_excess = m["sharpe"] - bh_m["sharpe"]
+    cm = m.get("calmar", np.nan)
+    bh_cm = bh_m.get("calmar", np.nan)
+    calmar_excess = (cm - bh_cm) if (np.isfinite(cm) and np.isfinite(bh_cm)) else 0.0
+    return {
+        "total_return":   m["total_return"],
+        "bh_return":      bh_m["total_return"],
+        "excess_return":  excess,
+        "sharpe":         m["sharpe"],
+        "sharpe_excess":  sharpe_excess,
+        "calmar":         cm,
+        "calmar_excess":  calmar_excess,
+        "max_drawdown":   m["max_drawdown"],
+        "n_trades":       m["n_trades"],
+    }
 
 
 def eval_signal_on_folds(signal: pd.Series, ret: pd.Series, folds, cost_bps: float,
                          short_funding_bps: float = 0.0, ppy: int = 365) -> dict:
-    """Backtest signal on each fold test window; score on EXCESS RETURN vs B&H."""
+    """Backtest signal on each fold test window; score via CFG.scoring objective."""
     fold_stats = []
     for _, va in folds:
         fold_ret = ret.iloc[va]
-        bt    = backtest(signal.iloc[va], fold_ret, cost_bps, short_funding_bps)
-        bh_bt = buy_and_hold(fold_ret, cost_bps)
-        m     = perf_metrics(bt,    ppy)
-        bh_m  = perf_metrics(bh_bt, ppy)
-        excess = m["total_return"] - bh_m["total_return"]
-        fold_stats.append({"total_return": m["total_return"], "bh_return": bh_m["total_return"],
-                           "excess_return": excess, "sharpe": m["sharpe"],
-                           "max_drawdown": m["max_drawdown"], "n_trades": m["n_trades"]})
+        m     = perf_metrics(backtest(signal.iloc[va], fold_ret, cost_bps, short_funding_bps), ppy)
+        bh_m  = perf_metrics(buy_and_hold(fold_ret, cost_bps), ppy)
+        fold_stats.append(_build_fold_stat(m, bh_m))
     excesses = [f["excess_return"] for f in fold_stats]
     rets     = [f["total_return"]  for f in fold_stats]
     return {
-        "score":                  score_folds(excesses),   # optimise alpha, not raw return
+        "score":                  score_folds(fold_stats),
         "mean_excess_return":     float(np.mean(excesses)),
         "mean_return":            float(np.mean(rets)),
         "std_return":             float(np.std(rets)),
         "mean_sharpe":            float(np.mean([f["sharpe"] for f in fold_stats])),
+        "mean_sharpe_excess":     float(np.mean([f["sharpe_excess"] for f in fold_stats])),
         "pct_folds_beat_bh":      float(np.mean([e > 0 for e in excesses])),
         "pct_folds_profitable":   float(np.mean([r > 0 for r in rets])),
         "fold_stats":             fold_stats,
@@ -110,8 +141,6 @@ def ml_eval_config(model_name: str, model_params: dict, strat: dict, X: pd.DataF
             Xtr = X.iloc[tr].loc[mask.values, cols]
             ytr = (fr_tr[mask] > 0).astype(int).values
         else:
-            # seq nets need contiguous rows; keep them in order but truncate the
-            # trailing rows whose forward label is undefined (don't mislabel as 0)
             valid = fr_tr.notna().values
             last = int(valid.nonzero()[0][-1]) + 1 if valid.any() else 0
             Xtr = X.iloc[tr][cols].iloc[:last]
@@ -126,25 +155,23 @@ def ml_eval_config(model_name: str, model_params: dict, strat: dict, X: pd.DataF
                                  thr_short=strat.get("thr_short", 0.45),
                                  scale=strat.get("scale", 0.2))
         fold_ret = ret.iloc[va]
-        bt    = backtest(signal, fold_ret, cost_bps, funding)
-        bh_m  = perf_metrics(buy_and_hold(fold_ret, cost_bps), ppy)
-        m     = perf_metrics(bt, ppy)
-        excess = m["total_return"] - bh_m["total_return"]
-        fold_stats.append({"total_return": m["total_return"], "bh_return": bh_m["total_return"],
-                           "excess_return": excess, "sharpe": m["sharpe"],
-                           "max_drawdown": m["max_drawdown"], "n_trades": m["n_trades"]})
-        running.append(excess)
+        m    = perf_metrics(backtest(signal, fold_ret, cost_bps, funding), ppy)
+        bh_m = perf_metrics(buy_and_hold(fold_ret, cost_bps), ppy)
+        fs   = _build_fold_stat(m, bh_m)
+        fold_stats.append(fs)
+        running.append(fs["excess_return"])
         if report_cb is not None:
-            report_cb(fold_i, float(np.mean(running)))   # report running mean EXCESS
+            report_cb(fold_i, float(np.mean(running)))
 
     excesses = [f["excess_return"] for f in fold_stats]
     rets     = [f["total_return"]  for f in fold_stats]
     return {
-        "score":                score_folds(excesses),   # optimise alpha vs B&H
+        "score":                score_folds(fold_stats),
         "mean_excess_return":   float(np.mean(excesses)),
         "mean_return":          float(np.mean(rets)),
         "std_return":           float(np.std(rets)),
         "mean_sharpe":          float(np.mean([f["sharpe"] for f in fold_stats])),
+        "mean_sharpe_excess":   float(np.mean([f["sharpe_excess"] for f in fold_stats])),
         "pct_folds_beat_bh":    float(np.mean([e > 0 for e in excesses])),
         "pct_folds_profitable": float(np.mean([r > 0 for r in rets])),
         "fold_stats":           fold_stats,
@@ -154,8 +181,8 @@ def ml_eval_config(model_name: str, model_params: dict, strat: dict, X: pd.DataF
 # ------------------------------------------------------- Optuna search space
 def _suggest_strategy(trial, mode: str, model_name: str, set_names: list[str]) -> dict:
     strat = {
-        "horizon": trial.suggest_categorical("horizon", [1, 2, 3, 5]),
-        "sizing": trial.suggest_categorical("sizing", ["binary", "scaled"]),
+        "horizon":     trial.suggest_categorical("horizon", [1, 2, 3, 5, 10, 21]),
+        "sizing":      trial.suggest_categorical("sizing", ["binary", "scaled", "kelly"]),
         "feature_set": trial.suggest_categorical("feature_set", set_names),
     }
     if model_name not in SEQ_ARCHS:
@@ -164,8 +191,9 @@ def _suggest_strategy(trial, mode: str, model_name: str, set_names: list[str]) -
         strat["thr_long"] = trial.suggest_float("thr_long", 0.50, 0.65)
         if mode == "long_short":
             strat["thr_short"] = trial.suggest_float("thr_short", 0.35, 0.50)
-    else:
+    elif strat["sizing"] == "scaled":
         strat["scale"] = trial.suggest_float("scale", 0.05, 0.5)
+    # kelly: no extra params — size is determined by 2p-1
     return strat
 
 
@@ -272,8 +300,8 @@ def run_study(model_name: str, mode: str, X, fwd_returns, ret, folds, feature_se
 
     study = optuna.create_study(
         direction="maximize",
-        sampler=optuna.samplers.TPESampler(seed=seed),
-        pruner=optuna.pruners.MedianPruner(n_startup_trials=6, n_warmup_steps=2),
+        sampler=optuna.samplers.TPESampler(seed=seed, multivariate=True),
+        pruner=optuna.pruners.MedianPruner(n_startup_trials=4, n_warmup_steps=1),
     )
     study.optimize(objective, n_trials=n_trials, n_jobs=n_jobs, catch=(Exception,))
 

@@ -49,6 +49,8 @@ def proba_to_signal(p_up: pd.Series, mode: str = "long_only", sizing: str = "bin
 
     binary:  long_only -> {0, 1};  long_short -> {-1, 0, +1}
     scaled:  position proportional to conviction (p-0.5)/scale, clipped.
+    kelly:   half-Kelly fraction: f = clip(2p-1, 0, 1) for long_only;
+             f = clip(2p-1, -1, 1) for long_short.
     """
     p = p_up.astype(float)
     if sizing == "binary":
@@ -58,7 +60,12 @@ def proba_to_signal(p_up: pd.Series, mode: str = "long_only", sizing: str = "bin
         sig[p > thr_long] = 1.0
         sig[p < thr_short] = -1.0
         return sig
-    # scaled
+    if sizing == "kelly":
+        raw = (2 * p - 1)           # full Kelly for win-rate-based edge
+        if mode == "long_only":
+            return raw.clip(0.0, 1.0)
+        return raw.clip(-1.0, 1.0)
+    # scaled (default fallback)
     raw = (p - 0.5) / max(scale, 1e-9)
     if mode == "long_only":
         return raw.clip(0.0, 1.0)

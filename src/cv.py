@@ -13,20 +13,32 @@ import numpy as np
 
 class PurgedWalkForward:
     def __init__(self, n_folds: int = 5, min_train_frac: float = 0.40,
-                 purge: int = 1, embargo: int = 5):
+                 purge: int = 1, embargo: int = 5, sliding: bool = False):
         self.n_folds = n_folds
         self.min_train_frac = min_train_frac
         self.purge = purge
         self.embargo = embargo
+        self.sliding = sliding   # True → fixed-size train window (non-expanding)
 
     def split(self, n: int):
-        """Yield (train_idx, test_idx) positional index arrays over range(n)."""
+        """Yield (train_idx, test_idx) positional index arrays over range(n).
+
+        expanding (default): train window grows with each fold.
+        sliding:             fixed train window equal to the first fold's size,
+                             so all folds see the same amount of history.
+        """
         first_test = int(n * self.min_train_frac)
         bounds = np.linspace(first_test, n, self.n_folds + 1).astype(int)
+        # sliding: fix the train window to the size of the first fold
+        fixed_train_size = max(0, first_test - self.purge - self.embargo)
         for k in range(self.n_folds):
             test_start, test_end = bounds[k], bounds[k + 1]
             train_end = max(0, test_start - self.purge - self.embargo)
-            train_idx = np.arange(0, train_end)
+            if self.sliding:
+                train_start = max(0, train_end - fixed_train_size)
+            else:
+                train_start = 0
+            train_idx = np.arange(train_start, train_end)
             test_idx = np.arange(test_start, test_end)
             if len(train_idx) == 0 or len(test_idx) == 0:
                 continue
