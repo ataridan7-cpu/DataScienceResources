@@ -21,11 +21,12 @@ from .models import RULES, make_model
 
 SEQ_ARCHS = {"lstm", "transformer"}
 
-# Optuna trial budgets per family (profit-first: generous where cheap)
+# Equal trial budgets — all classical/tree families get the same search depth.
+# Neural nets are capped lower due to wall-clock cost (~60s/trial on CPU).
 TRIAL_BUDGET = {
-    "logistic": 80, "knn": 60, "svm_rbf": 50, "random_forest": 40,
-    "xgboost": 120, "lightgbm": 120, "catboost": 60,
-    "mlp": 24, "lstm": 20, "transformer": 16,
+    "logistic": 80, "knn": 80, "svm_rbf": 80, "random_forest": 80,
+    "xgboost": 80, "lightgbm": 80, "catboost": 80,
+    "mlp": 40, "lstm": 32, "transformer": 24,
 }
 
 

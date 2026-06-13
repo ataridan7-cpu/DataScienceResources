@@ -64,7 +64,7 @@ from src.config import CFG
 from src.data_io import load_prices, summarize, detect_granularity
 from src.features import build_features
 from src.labels import forward_return, sign_label
-from src.cv import PurgedWalkForward, dev_holdout_split
+from src.cv import PurgedWalkForward, dev_holdout_split, holdout_windows
 from src.backtest import backtest, buy_and_hold, proba_to_signal
 from src.metrics import perf_metrics, metrics_table
 from src.models import ML_MODELS, RULES
@@ -838,6 +838,90 @@ for ax, piv, title in [(axes[0], piv_s, f"Monthly P&L — {label[:35]}"),
     ax.set_title(title, fontweight="bold")
 plt.tight_layout(); plt.show()
 """)
+
+# ======================================================= 11b. ROLLING OOS
+md(r"""
+## 11b. Rolling out-of-sample stability — 3 holdout sub-windows
+
+The 254-bar holdout is split into **3 non-overlapping windows** (~85 bars ≈ 3 months
+each). For the ML winner the frozen hyperparameters are kept, but the model is
+**refit on all data before each window** (expanding training set), so every window
+is a genuine fresh OOS evaluation. Rules require no refitting.
+
+This answers: *does the dev-selected winner hold up across different market regimes
+within the holdout, or was the overall result driven by a single lucky sub-period?*
+""")
+
+code(r"""
+from src.pipeline import rolling_window_eval
+
+winner_key = cand.iloc[0]["key"]
+print(f"Running rolling OOS for: {winner_key}")
+rolling_df = rolling_window_eval(
+    data, ml_results, rules, fsets, CFG,
+    n_windows=3, top_rules=0, keys_filter=[winner_key])
+
+winner_roll = rolling_df[rolling_df["key"] == winner_key].reset_index(drop=True)
+bh_roll     = rolling_df[rolling_df["key"] == "BUY & HOLD"].reset_index(drop=True)
+
+print(f"\n{'Win':>3}  {'Period':>25}  {'Return':>7}  {'B&H':>7}  {'Excess':>8}  "
+      f"{'Sharpe':>6}  {'Beats B&H':>9}")
+print("-" * 75)
+for _, r in winner_roll.iterrows():
+    print(f"  {int(r['window']):>2}  {r['period']:>25}  {r['total_return']:>6.1%}  "
+          f"{r['bh_return']:>6.1%}  {r['excess_return']:>+7.1%}  {r['sharpe']:>6.2f}  "
+          f"{'YES ✓' if r['beats_bh'] else 'no  ✗':>9}")
+
+n_beats = int(winner_roll["beats_bh"].sum())
+mean_exc = winner_roll["excess_return"].mean()
+std_exc  = winner_roll["excess_return"].std()
+print(f"\nBeats B&H: {n_beats}/{len(winner_roll)} windows  |  "
+      f"mean excess {mean_exc:+.1%}  std {std_exc:.1%}")
+verdict = ("edge CONSISTENT across sub-periods ✓"
+           if n_beats >= 2 else
+           "edge NOT consistent — concentrated in one sub-period ✗")
+print(f"Verdict : {verdict}")
+""")
+
+code(r"""
+# ── Rolling window bar charts ─────────────────────────────────────────────────
+fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+w_labels = [f"W{int(r['window'])}\n{r['period'][:7]}" for _, r in winner_roll.iterrows()]
+
+# Left: excess return per window (with B&H zero-line)
+exc_colors = ["seagreen" if e > 0 else "firebrick" for e in winner_roll["excess_return"]]
+bars = axes[0].bar(range(len(winner_roll)), winner_roll["excess_return"] * 100,
+                   color=exc_colors, edgecolor="none", alpha=0.85)
+axes[0].axhline(0, color="steelblue", lw=2, ls="--", label="B&H (0 = tie)")
+axes[0].set_xticks(range(len(winner_roll)))
+axes[0].set_xticklabels(w_labels, fontsize=9)
+axes[0].set_ylabel("excess return vs B&H (%)")
+axes[0].set_title(f"Per-window excess return\n{winner_key.split('__')[0]} [{winner_key.split('__')[-1]}]",
+                  fontweight="bold")
+axes[0].legend()
+for bar, val in zip(bars, winner_roll["excess_return"]):
+    yoff = 0.3 if val >= 0 else -1.2
+    axes[0].text(bar.get_x() + bar.get_width() / 2, bar.get_height() + yoff,
+                 f"{val:+.1%}", ha="center", va="bottom", fontsize=9)
+
+# Right: Sharpe per window — winner vs B&H
+x = np.arange(len(winner_roll))
+axes[1].bar(x - 0.2, winner_roll["sharpe"], 0.4,
+            color=["seagreen" if s > 0 else "firebrick" for s in winner_roll["sharpe"]],
+            alpha=0.85, label="Winner")
+axes[1].bar(x + 0.2, bh_roll["sharpe"], 0.4,
+            color="steelblue", alpha=0.65, label="B&H")
+axes[1].axhline(0, color="k", lw=0.8)
+axes[1].set_xticks(x)
+axes[1].set_xticklabels(w_labels, fontsize=9)
+axes[1].set_ylabel("Sharpe ratio")
+axes[1].set_title("Sharpe ratio per window: Winner vs B&H", fontweight="bold")
+axes[1].legend()
+fig.suptitle("Rolling holdout stability — 3 expanding-train sub-windows",
+             fontsize=12, fontweight="bold")
+plt.tight_layout(); plt.show()
+""")
+
 
 # ======================================================= 12. ROBUSTNESS
 md(r"""

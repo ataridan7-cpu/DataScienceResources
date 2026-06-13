@@ -14,7 +14,7 @@ import pandas as pd
 
 from .backtest import backtest, buy_and_hold, proba_to_signal
 from .config import CFG, Config
-from .cv import PurgedWalkForward, dev_holdout_split
+from .cv import PurgedWalkForward, dev_holdout_split, holdout_windows
 from .data_io import load_prices
 from .features import build_features
 from .labels import forward_return, sign_label
@@ -202,3 +202,134 @@ def final_leaderboard(data, ml_results: dict, rules_results: dict, feature_sets:
           .sort_values("dev_score", ascending=False, na_position="last")
           .reset_index(drop=True))
     return lb, signals
+
+
+def rolling_window_eval(
+    data, ml_results: dict, rules_results: dict, feature_sets: dict,
+    cfg: Config = CFG, n_windows: int = 3, top_rules: int = 2,
+    keys_filter: list[str] | None = None,
+) -> pd.DataFrame:
+    """Evaluate strategies across n_windows sub-windows of the holdout.
+
+    ML models: frozen hyperparams, refit on all data before each window
+    (expanding training set) → each window is a genuine OOS evaluation.
+    Rules: no refitting; full-history signal sliced per window.
+
+    keys_filter: if set, only evaluate the listed strategy keys.
+    """
+    hold_idx = data["hold_idx"]
+    windows = holdout_windows(hold_idx, n_windows)
+    rows = []
+
+    def _bh_m(w_idx):
+        return perf_metrics(buy_and_hold(data["ret"].iloc[w_idx], cfg.cost_bps_per_side),
+                            cfg.periods_per_year)
+
+    bh_per_win = [_bh_m(w) for w in windows]
+
+    def _period(w_idx):
+        s = data["X"].index[w_idx[0]].strftime("%Y-%m-%d")
+        e = data["X"].index[w_idx[-1]].strftime("%Y-%m-%d")
+        return f"{s}–{e}"
+
+    # ---- ML models ----
+    for key, res in ml_results.items():
+        if not res.get("best_params"):
+            continue
+        if keys_filter is not None and key not in keys_filter:
+            continue
+        name, mode = key.split("__")
+        strat, mparams = split_params(res["best_params"])
+        cols = feature_sets["sets"][strat["feature_set"]]
+        h = strat["horizon"]
+        band = 0.0 if name in SEQ_ARCHS else strat.get("band", 0.0)
+        fr = data["fwd"][h]
+        funding = cfg.short_funding_bps_per_bar if mode == "long_short" else 0.0
+
+        for w_i, w_idx in enumerate(windows):
+            train_idx = np.arange(0, w_idx[0])
+            fr_tr = fr.iloc[train_idx]
+            if name in SEQ_ARCHS:
+                valid = fr_tr.notna().values
+                last = int(valid.nonzero()[0][-1]) + 1 if valid.any() else 0
+                Xtr = data["X"].iloc[train_idx][cols].iloc[:last]
+                ytr = (fr_tr.iloc[:last] > 0).astype(int).values
+            else:
+                mask = fr_tr.notna() & (fr_tr.abs() > band)
+                if mask.sum() < 20:
+                    continue
+                Xtr = data["X"].iloc[train_idx].loc[mask.values, cols]
+                ytr = (fr_tr[mask] > 0).astype(int).values
+            if len(ytr) < 20 or len(np.unique(ytr)) < 2:
+                continue
+            model = make_model(name, mparams, cfg.seed)
+            model.fit(Xtr.values, ytr)
+            p = pd.Series(
+                model.predict_proba(data["X"].iloc[w_idx][cols].values)[:, 1],
+                index=data["X"].index[w_idx],
+            )
+            sig = proba_to_signal(p, mode=mode, sizing=strat["sizing"],
+                                  thr_long=strat.get("thr_long", 0.55),
+                                  thr_short=strat.get("thr_short", 0.45),
+                                  scale=strat.get("scale", 0.2))
+            ret_w = data["ret"].iloc[w_idx]
+            m = perf_metrics(backtest(sig, ret_w, cfg.cost_bps_per_side, funding),
+                             cfg.periods_per_year)
+            bh_m = bh_per_win[w_i]
+            rows.append({
+                "key": key, "strategy": name, "mode": mode,
+                "window": w_i + 1, "n_bars": len(w_idx),
+                "period": _period(w_idx),
+                "total_return": m["total_return"],
+                "bh_return": bh_m["total_return"],
+                "excess_return": m["total_return"] - bh_m["total_return"],
+                "sharpe": m["sharpe"],
+                "max_drawdown": m["max_drawdown"],
+                "beats_bh": bool(m["total_return"] > bh_m["total_return"]),
+            })
+
+    # ---- Rules ----
+    for mode, lb_df in rules_results.items():
+        funding = cfg.short_funding_bps_per_bar if mode == "long_short" else 0.0
+        for _, row in lb_df.head(top_rules).iterrows():
+            params = json.loads(row["params"])
+            key = f"{row['rule']}({row['params']})__{mode}"
+            if keys_filter is not None and key not in keys_filter:
+                continue
+            sig_full = RULES[row["rule"]]["fn"](data["prices"], mode=mode, **params)
+            for w_i, w_idx in enumerate(windows):
+                sig_w = sig_full.iloc[w_idx]
+                ret_w = data["ret"].iloc[w_idx]
+                m = perf_metrics(backtest(sig_w, ret_w, cfg.cost_bps_per_side, funding),
+                                 cfg.periods_per_year)
+                bh_m = bh_per_win[w_i]
+                rows.append({
+                    "key": key,
+                    "strategy": f"{row['rule']} {row['params']}",
+                    "mode": mode,
+                    "window": w_i + 1, "n_bars": len(w_idx),
+                    "period": _period(w_idx),
+                    "total_return": m["total_return"],
+                    "bh_return": bh_m["total_return"],
+                    "excess_return": m["total_return"] - bh_m["total_return"],
+                    "sharpe": m["sharpe"],
+                    "max_drawdown": m["max_drawdown"],
+                    "beats_bh": bool(m["total_return"] > bh_m["total_return"]),
+                })
+
+    # ---- B&H benchmark ----
+    for w_i, w_idx in enumerate(windows):
+        bh_m = bh_per_win[w_i]
+        rows.append({
+            "key": "BUY & HOLD", "strategy": "BUY & HOLD", "mode": "long_only",
+            "window": w_i + 1, "n_bars": len(w_idx),
+            "period": _period(w_idx),
+            "total_return": bh_m["total_return"],
+            "bh_return": bh_m["total_return"],
+            "excess_return": 0.0,
+            "sharpe": bh_m["sharpe"],
+            "max_drawdown": bh_m["max_drawdown"],
+            "beats_bh": False,
+        })
+
+    return pd.DataFrame(rows)

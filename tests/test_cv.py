@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from src.cv import PurgedWalkForward, dev_holdout_split  # noqa: E402
+from src.cv import PurgedWalkForward, dev_holdout_split, holdout_windows  # noqa: E402
 
 
 def test_train_strictly_precedes_test_with_gap():
@@ -40,8 +40,25 @@ def test_holdout_is_most_recent_and_disjoint():
     assert len(dev) + len(hold) == n           # exhaustive partition
 
 
+def test_holdout_windows_partition():
+    _, hold = dev_holdout_split(1000, holdout_frac=0.15)
+    windows = holdout_windows(hold, n_windows=3)
+    assert len(windows) == 3
+    # each window is non-empty and contiguous
+    for w in windows:
+        assert len(w) > 0
+        assert np.array_equal(w, np.arange(w[0], w[-1] + 1))
+    # windows are non-overlapping and cover the full holdout
+    combined = np.concatenate(windows)
+    assert set(combined) == set(hold)
+    assert len(combined) == len(hold)
+    # windows are ordered (earlier window precedes later)
+    for i in range(len(windows) - 1):
+        assert windows[i][-1] < windows[i + 1][0]
+
+
 if __name__ == "__main__":
     for fn in [test_train_strictly_precedes_test_with_gap, test_expanding_train_window,
-               test_holdout_is_most_recent_and_disjoint]:
+               test_holdout_is_most_recent_and_disjoint, test_holdout_windows_partition]:
         fn()
     print("cv tests passed")

@@ -25,7 +25,7 @@ warnings.filterwarnings("ignore")
 from src.config import CFG
 from src.models import ML_MODELS
 from src.pipeline import (load_dataset, stage_rules, stage_feature_sets, stage_ml,
-                          final_leaderboard)
+                          final_leaderboard, rolling_window_eval)
 
 
 def _json_safe(o):
@@ -84,6 +84,16 @@ def main(force: bool = False):
     rank_corr = float(pd.Series(dev).corr(pd.Series(oos), method="spearman"))
     holdout_max = cand.sort_values("excess_return", ascending=False).iloc[0]
 
+    print("[+] rolling OOS stability (winner refitted on 3 expanding windows) ...", flush=True)
+    t = time.time()
+    rolling_df = rolling_window_eval(
+        data, ml_results, rules, fsets, CFG,
+        n_windows=3, keys_filter=[winner["key"]])
+    print(f"    done in {time.time()-t:.0f}s", flush=True)
+    winner_roll = rolling_df[rolling_df["key"] == winner["key"]]
+    n_beats = int(winner_roll["beats_bh"].sum()) if len(winner_roll) > 0 else 0
+    rolling_records = rolling_df.to_dict(orient="records")
+
     summary = {
         "leaderboard": lb.to_dict(orient="records"),
         "buy_hold_return": float(bh["total_return"]),
@@ -93,6 +103,8 @@ def main(force: bool = False):
         "winner_excess_return": float(winner["excess_return"]),
         "dev_oos_spearman": rank_corr,
         "holdout_max_excess_diagnostic": holdout_max.to_dict(),
+        "winner_rolling_windows": rolling_records,
+        "winner_beats_bh_in_n_windows": n_beats,
         "elapsed_sec": round(time.time() - t0, 1),
     }
     (CFG.results_dir / "summary.json").write_text(
@@ -108,6 +120,13 @@ def main(force: bool = False):
     print(f"  (~0 or negative => holdout rank is noise; the {holdout_max['strategy']} "
           f"[{holdout_max['mode']}] {holdout_max['excess_return']:+.1%} 'max' is luck, "
           f"NOT a fair pick)")
+    if len(winner_roll) > 0:
+        print(f"\nRolling stability — winner beats B&H in {n_beats}/{len(winner_roll)} windows:")
+        for _, row in winner_roll.iterrows():
+            print(f"  W{int(row['window'])} {row['period']}: "
+                  f"return {row['total_return']:+.1%}, B&H {row['bh_return']:+.1%}, "
+                  f"excess {row['excess_return']:+.1%}  "
+                  f"{'✓' if row['beats_bh'] else '✗'}")
     print("\nDiagnostic — full holdout leaderboard (NOT the selection criterion):")
     disp = lb.copy()
     disp["outcome"] = np.where(disp["beats_bh"] & disp["profitable"], "beats B&H + profit",

@@ -40,3 +40,8 @@ def dev_holdout_split(n: int, holdout_frac: float = 0.15) -> tuple[np.ndarray, n
     """Carve the most recent `holdout_frac` rows off as the final test segment."""
     cut = int(n * (1 - holdout_frac))
     return np.arange(0, cut), np.arange(cut, n)
+
+
+def holdout_windows(hold_idx: np.ndarray, n_windows: int = 3) -> list[np.ndarray]:
+    """Split holdout index into n_windows equal non-overlapping sub-windows."""
+    return [arr for arr in np.array_split(hold_idx, n_windows) if len(arr) > 0]
