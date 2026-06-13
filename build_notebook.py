@@ -516,9 +516,9 @@ md(r"""
 ## 9. Model search — 10 families × 2 modes, profit-maximizing Optuna
 
 Each study jointly searches model hyperparameters and strategy wrapper (horizon,
-threshold, sizing, feature set), **objective = mean OOS _excess return vs buy & hold_
-− 0.25·std** through the full cost-aware backtest. Optimising *alpha over B&H*, not
-raw return, so a strategy is only rewarded for **beating the benchmark**. ML uses
+threshold, sizing, feature set), **objective = mean OOS (model_profit − buy & hold)**
+through the full cost-aware backtest — pure excess return, no other penalty.
+A trial is only rewarded for genuinely **beating the benchmark** net of costs. ML uses
 Optuna TPE + median pruning.
 """)
 

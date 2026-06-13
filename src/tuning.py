@@ -1,8 +1,8 @@
 """Profit-first hyperparameter search.
 
-Objective (maximized): mean fold EXCESS RETURN vs buy-and-hold  -  0.25 * std.
-Scoring on alpha (strategy − B&H per fold) so the search explicitly maximises
-outperformance, not just raw return. B&H is computed per fold window.
+Objective (maximized): mean fold (model_profit − buy_and_hold) across CV folds.
+Pure excess-return over B&H — no variance penalty. B&H is computed per fold
+window so every trial's score is directly comparable to the benchmark.
 Every trial runs the full signal -> position -> cost-aware backtest pipeline.
 Rules use exhaustive grid search; ML families use Optuna TPE + MedianPruner.
 """
@@ -19,7 +19,6 @@ from .backtest import backtest, buy_and_hold, proba_to_signal
 from .metrics import perf_metrics
 from .models import RULES, make_model
 
-STABILITY_LAMBDA = 0.25
 SEQ_ARCHS = {"lstm", "transformer"}
 
 # Optuna trial budgets per family (profit-first: generous where cheap)
@@ -32,8 +31,8 @@ TRIAL_BUDGET = {
 
 # ------------------------------------------------------------------ scoring
 def score_folds(fold_returns: list[float]) -> float:
-    fr = np.asarray(fold_returns, dtype=float)
-    return float(fr.mean() - STABILITY_LAMBDA * fr.std())
+    """Mean (model_profit − buy_and_hold) across folds — the exact objective."""
+    return float(np.mean(fold_returns))
 
 
 def eval_signal_on_folds(signal: pd.Series, ret: pd.Series, folds, cost_bps: float,
