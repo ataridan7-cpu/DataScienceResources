@@ -78,7 +78,7 @@ def stage_feature_sets(data, cfg: Config = CFG, force: bool = False) -> dict:
     return build_feature_sets(_dev(data, data["X"]), _dev(data, data["y1"]),
                               _dev(data, data["ret"]), data["folds"],
                               cfg.results_dir / "tuning" / "feature_sets.json",
-                              cfg.cost_bps_per_side, cfg.seed, force)
+                              cfg.cost_bps_per_side, cfg.seed, force, n_jobs=cfg.n_jobs)
 
 
 def stage_ml(data, feature_sets: dict, models: list[str], cfg: Config = CFG,
@@ -94,7 +94,7 @@ def stage_ml(data, feature_sets: dict, models: list[str], cfg: Config = CFG,
                 _dev(data, data["ret"]), data["folds"], feature_sets["sets"],
                 cfg.cost_bps_per_side, cfg.short_funding_bps_per_bar,
                 cfg.results_dir / "tuning", seed=cfg.seed,
-                ppy=cfg.periods_per_year, force=force)
+                ppy=cfg.periods_per_year, force=force, n_jobs=cfg.n_jobs)
     return results
 
 

@@ -118,7 +118,12 @@ ML_MODELS = ["logistic", "svm_rbf", "knn", "random_forest",
              "xgboost", "lightgbm", "catboost", "mlp", "lstm", "transformer"]
 
 
-def make_model(name: str, params: dict, seed: int = 42):
+def make_model(name: str, params: dict, seed: int = 42, threads: int = 1):
+    """Build an estimator pinned to `threads` internal threads.
+
+    Trials are parallelised by Optuna (one thread per concurrent trial), so
+    each model stays single-threaded to avoid oversubscribing the CPU.
+    """
     from sklearn.pipeline import Pipeline
     from sklearn.preprocessing import StandardScaler
 
@@ -134,25 +139,26 @@ def make_model(name: str, params: dict, seed: int = 42):
                                    random_state=seed, **params))])
     if name == "knn":
         from sklearn.neighbors import KNeighborsClassifier
-        return Pipeline([("sc", StandardScaler()), ("m", KNeighborsClassifier(**params))])
+        return Pipeline([("sc", StandardScaler()),
+                         ("m", KNeighborsClassifier(n_jobs=threads, **params))])
     if name == "random_forest":
         from sklearn.ensemble import RandomForestClassifier
-        return RandomForestClassifier(random_state=seed, n_jobs=-1,
+        return RandomForestClassifier(random_state=seed, n_jobs=threads,
                                       class_weight="balanced", **params)
     if name == "xgboost":
         from xgboost import XGBClassifier
-        return XGBClassifier(random_state=seed, n_jobs=4, eval_metric="logloss",
+        return XGBClassifier(random_state=seed, n_jobs=threads, eval_metric="logloss",
                              tree_method="hist", **params)
     if name == "lightgbm":
         from lightgbm import LGBMClassifier
-        return LGBMClassifier(random_state=seed, n_jobs=4, verbosity=-1,
+        return LGBMClassifier(random_state=seed, n_jobs=threads, verbosity=-1,
                               class_weight="balanced", **params)
     if name == "catboost":
         from catboost import CatBoostClassifier
         return CatBoostClassifier(random_seed=seed, verbose=0, allow_writing_files=False,
-                                  auto_class_weights="Balanced", **params)
+                                  thread_count=threads, auto_class_weights="Balanced", **params)
     if name in ("mlp", "lstm", "transformer"):
-        return TorchClassifier(arch=name, seed=seed, **params)
+        return TorchClassifier(arch=name, seed=seed, threads=threads, **params)
     raise ValueError(f"unknown model {name}")
 
 
@@ -167,11 +173,12 @@ class TorchClassifier:
     def __init__(self, arch: str = "mlp", hidden: int = 32, n_layers: int = 1,
                  dropout: float = 0.2, lr: float = 1e-3, weight_decay: float = 1e-4,
                  epochs: int = 200, patience: int = 15, batch_size: int = 64,
-                 seq_len: int = 16, n_heads: int = 2, seed: int = 42):
+                 seq_len: int = 16, n_heads: int = 2, seed: int = 42, threads: int = 1):
         self.arch, self.hidden, self.n_layers = arch, hidden, n_layers
         self.dropout, self.lr, self.weight_decay = dropout, lr, weight_decay
         self.epochs, self.patience, self.batch_size = epochs, patience, batch_size
         self.seq_len, self.n_heads, self.seed = seq_len, n_heads, seed
+        self.threads = threads
 
     # ------------------------------------------------------------- internals
     def _build(self, n_feat: int):
@@ -224,6 +231,7 @@ class TorchClassifier:
     def fit(self, X, y):
         import torch
         import torch.nn as nn
+        torch.set_num_threads(max(1, self.threads))  # avoid oversubscription under parallel trials
         X = np.asarray(X, dtype=np.float64)
         y = np.asarray(y, dtype=np.float32)
         self.mu_, self.sd_ = X.mean(0), X.std(0) + 1e-9

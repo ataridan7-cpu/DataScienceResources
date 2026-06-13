@@ -27,6 +27,12 @@ class Config:
     seed: int = 42
     periods_per_year: int = 365    # crypto trades 7 days/week
 
+    # --- parallelism ---
+    # Optuna runs this many trials concurrently; each model is pinned to
+    # `model_threads` internal threads so the two layers don't oversubscribe.
+    n_jobs: int = 4                # parallel Optuna workers (= CPU cores)
+    model_threads: int = 1         # internal threads per model fit
+
     @property
     def cost_bps_per_side(self) -> float:
         return self.fee_bps + self.slippage_bps

@@ -31,14 +31,15 @@ def corr_prune(X: pd.DataFrame, threshold: float = 0.95) -> list[str]:
 
 
 def _fit_baseline(Xtr: pd.DataFrame, ytr: np.ndarray, seed: int):
+    # single-threaded: greedy candidate scoring is parallelised across cores instead
     from lightgbm import LGBMClassifier
-    model = LGBMClassifier(random_state=seed, n_jobs=4, **BASELINE_LGBM)
+    model = LGBMClassifier(random_state=seed, n_jobs=1, **BASELINE_LGBM)
     model.fit(Xtr.values, ytr)
     return model
 
 
 def permutation_ranking(X: pd.DataFrame, y: pd.Series, folds, cols: list[str],
-                        seed: int = 42, n_repeats: int = 5) -> pd.Series:
+                        seed: int = 42, n_repeats: int = 5, n_jobs: int = 4) -> pd.Series:
     """Mean permutation importance (ROC-AUC on validation folds), aggregated."""
     from sklearn.inspection import permutation_importance
 
@@ -52,7 +53,7 @@ def permutation_ranking(X: pd.DataFrame, y: pd.Series, folds, cols: list[str],
         model = _fit_baseline(X.iloc[tr].loc[m_tr.values, cols], ytr[m_tr].astype(int).values, seed)
         r = permutation_importance(model, X.iloc[va].loc[m_va.values, cols].values,
                                    yva[m_va].astype(int).values, scoring="roc_auc",
-                                   n_repeats=n_repeats, random_state=seed)
+                                   n_repeats=n_repeats, random_state=seed, n_jobs=n_jobs)
         agg += pd.Series(r.importances_mean, index=cols)
         n_used += 1
     return (agg / max(n_used, 1)).sort_values(ascending=False)
@@ -76,22 +77,25 @@ def _profit_of_set(cols: list[str], X, y, ret, folds, cost_bps, seed) -> float:
 
 def greedy_forward(X, y, ret, folds, ranked: list[str], cost_bps: float,
                    max_features: int = 15, min_features: int = 5, pool: int = 25,
-                   seed: int = 42) -> list[str]:
+                   seed: int = 42, n_jobs: int = 4) -> list[str]:
     """Greedy forward selection by OOS net profit from the top-`pool` ranked features.
 
     Adds the best-scoring candidate at each step; keeps going past the plateau
     until `min_features` are chosen so the set is usable, then stops when no
     further addition improves OOS profit (up to `max_features`).
     """
+    from joblib import Parallel, delayed
     candidates = ranked[:pool]
     chosen: list[str] = []
     best = -np.inf
     while len(chosen) < max_features:
-        scores = {c: _profit_of_set(chosen + [c], X, y, ret, folds, cost_bps, seed)
-                  for c in candidates if c not in chosen}
-        if not scores:
+        pending = [c for c in candidates if c not in chosen]
+        if not pending:
             break
-        cand, sc = max(scores.items(), key=lambda kv: kv[1])
+        scores = Parallel(n_jobs=n_jobs, prefer="threads")(
+            delayed(_profit_of_set)(chosen + [c], X, y, ret, folds, cost_bps, seed)
+            for c in pending)
+        cand, sc = max(zip(pending, scores), key=lambda kv: kv[1])
         if sc <= best + 1e-6 and len(chosen) >= min_features:
             break
         chosen.append(cand)
@@ -101,15 +105,15 @@ def greedy_forward(X, y, ret, folds, ranked: list[str], cost_bps: float,
 
 def build_feature_sets(X: pd.DataFrame, y: pd.Series, ret: pd.Series, folds,
                        cache_path: Path, cost_bps: float, seed: int = 42,
-                       force: bool = False) -> dict:
+                       force: bool = False, n_jobs: int = 4) -> dict:
     """Produce the named candidate sets searched by every Optuna study."""
     if cache_path.exists() and not force:
         return json.loads(cache_path.read_text())
 
     pruned = corr_prune(X, 0.95)
-    ranking = permutation_ranking(X, y, folds, pruned, seed)
+    ranking = permutation_ranking(X, y, folds, pruned, seed, n_jobs=n_jobs)
     ranked = list(ranking.index)
-    greedy = greedy_forward(X, y, ret, folds, ranked, cost_bps, seed=seed)
+    greedy = greedy_forward(X, y, ret, folds, ranked, cost_bps, seed=seed, n_jobs=n_jobs)
 
     sets = {
         "all_pruned": pruned,

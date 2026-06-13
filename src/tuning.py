@@ -24,9 +24,9 @@ SEQ_ARCHS = {"lstm", "transformer"}
 
 # Optuna trial budgets per family (profit-first: generous where cheap)
 TRIAL_BUDGET = {
-    "logistic": 80, "knn": 60, "svm_rbf": 40, "random_forest": 60,
+    "logistic": 80, "knn": 60, "svm_rbf": 50, "random_forest": 40,
     "xgboost": 120, "lightgbm": 120, "catboost": 60,
-    "mlp": 20, "lstm": 18, "transformer": 14,
+    "mlp": 24, "lstm": 20, "transformer": 16,
 }
 
 
@@ -174,7 +174,7 @@ def _suggest_model(trial, name: str) -> dict:
         return {"n_neighbors": i("n_neighbors", 5, 100, log=True),
                 "weights": c("weights", ["uniform", "distance"])}
     if name == "random_forest":
-        return {"n_estimators": i("n_estimators", 100, 400), "max_depth": i("max_depth", 2, 8),
+        return {"n_estimators": i("n_estimators", 100, 250), "max_depth": i("max_depth", 2, 8),
                 "min_samples_leaf": i("min_samples_leaf", 5, 50),
                 "max_features": f("max_features", 0.3, 1.0)}
     if name == "xgboost":
@@ -227,8 +227,12 @@ def split_params(flat: dict) -> tuple[dict, dict]:
 def run_study(model_name: str, mode: str, X, fwd_returns, ret, folds, feature_sets,
               cost_bps: float, short_funding_bps: float, cache_dir: Path,
               n_trials: int | None = None, seed: int = 42, ppy: int = 365,
-              force: bool = False) -> dict:
-    """Run (or load cached) Optuna study for one model family x mode."""
+              force: bool = False, n_jobs: int = 1) -> dict:
+    """Run (or load cached) Optuna study for one model family x mode.
+
+    `n_jobs` runs that many trials concurrently (threads). Models are pinned to
+    one internal thread (see make_model) so the cores aren't oversubscribed.
+    """
     import optuna
 
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -263,9 +267,9 @@ def run_study(model_name: str, mode: str, X, fwd_returns, ret, folds, feature_se
     study = optuna.create_study(
         direction="maximize",
         sampler=optuna.samplers.TPESampler(seed=seed),
-        pruner=optuna.pruners.MedianPruner(n_startup_trials=8, n_warmup_steps=2),
+        pruner=optuna.pruners.MedianPruner(n_startup_trials=6, n_warmup_steps=2),
     )
-    study.optimize(objective, n_trials=n_trials, catch=(Exception,))
+    study.optimize(objective, n_trials=n_trials, n_jobs=n_jobs, catch=(Exception,))
 
     done = [t for t in study.trials if t.value is not None and np.isfinite(t.value)]
     top = sorted(done, key=lambda t: t.value, reverse=True)[:5]
