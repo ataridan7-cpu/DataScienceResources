@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .backtest import backtest, proba_to_signal
+from .backtest import backtest, buy_and_hold, proba_to_signal
 from .metrics import perf_metrics
 from .tuning import score_folds
 
@@ -59,17 +59,19 @@ def permutation_ranking(X: pd.DataFrame, y: pd.Series, folds, cols: list[str],
 
 
 def _profit_of_set(cols: list[str], X, y, ret, folds, cost_bps, seed) -> float:
-    """Mean OOS net fold return of the baseline model on a feature subset."""
-    rets = []
+    """Mean OOS fold EXCESS return (vs B&H) of the baseline model on a subset."""
+    excesses = []
     for tr, va in folds:
         ytr = y.iloc[tr]
         m = ytr.notna()
         model = _fit_baseline(X.iloc[tr].loc[m.values, cols], ytr[m].astype(int).values, seed)
         p = pd.Series(model.predict_proba(X.iloc[va][cols].values)[:, 1], index=X.index[va])
         sig = proba_to_signal(p, mode="long_only", sizing="binary", thr_long=0.55)
-        m_ = perf_metrics(backtest(sig, ret.iloc[va], cost_bps), 365)
-        rets.append(m_["total_return"])
-    return score_folds(rets)
+        fold_ret = ret.iloc[va]
+        strat = perf_metrics(backtest(sig, fold_ret, cost_bps), 365)["total_return"]
+        bh = perf_metrics(buy_and_hold(fold_ret, cost_bps), 365)["total_return"]
+        excesses.append(strat - bh)
+    return score_folds(excesses)
 
 
 def greedy_forward(X, y, ret, folds, ranked: list[str], cost_bps: float,

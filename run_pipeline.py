@@ -55,19 +55,22 @@ def main(force: bool = False):
     print("[5/5] final one-shot holdout leaderboard ...", flush=True)
     lb, _ = final_leaderboard(data, ml_results, rules, fsets, CFG)
     bh = lb[lb.strategy == "BUY & HOLD"].iloc[0]
+    best_strat = lb[lb.type != "benchmark"].iloc[0]   # sorted by excess_return
     summary = {
         "leaderboard": lb.to_dict(orient="records"),
         "buy_hold_return": float(bh["total_return"]),
         "buy_hold_sharpe": float(bh["sharpe"]),
-        "best_overall": lb.iloc[0].to_dict(),
+        "best_by_excess": best_strat.to_dict(),
+        "best_excess_return": float(best_strat["excess_return"]),
         "elapsed_sec": round(time.time() - t0, 1),
     }
     (CFG.results_dir / "summary.json").write_text(json.dumps(summary, indent=2, default=str))
 
     print(f"\nDONE in {time.time()-t0:.0f}s")
     print(f"Buy & Hold holdout return: {bh['total_return']:.1%} (Sharpe {bh['sharpe']:.2f})")
-    print("\nTop 8 by holdout net return:")
-    cols = ["strategy", "mode", "total_return", "sharpe", "max_drawdown", "calmar", "n_trades"]
+    print("\nTop 8 by holdout EXCESS return vs Buy & Hold:")
+    cols = ["strategy", "mode", "total_return", "excess_return", "vs_bh_x",
+            "sharpe", "max_drawdown", "n_trades"]
     print(lb[cols].head(8).to_string(index=False))
 
 

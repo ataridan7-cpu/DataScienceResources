@@ -450,24 +450,27 @@ OOS net fold return**. Sets the bar before any ML.
 
 code(r"""
 rules = stage_rules(data, CFG)
-show = ["rule", "params", "mean_return", "std_return", "mean_sharpe", "pct_folds_profitable", "score"]
+show = ["rule", "params", "mean_excess_return", "mean_return", "mean_sharpe",
+        "pct_folds_beat_bh", "score"]
+print("Rule grids ranked by EXCESS return vs B&H (score = mean_excess − 0.25·std):\n")
 for mode in ("long_only", "long_short"):
     print(f"### {mode} — top 5:")
     print(rules[mode][show].head(5).to_string(index=False), "\n")
 """)
 
 code(r"""
-# ── Rule leaderboard visualised ───────────────────────────────────────────────
+# ── Rule leaderboard visualised — EXCESS return vs B&H ───────────────────────
 fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-for ax, (mode, lb) in zip(axes, rules.items()):
-    top = lb.head(15).copy()
-    top["label"] = top["rule"] + "\n" + top["params"].str[:28]
-    colors = [plt.cm.RdYlGn(0.2 + 0.6 * (p > 0.5)) for p in top["pct_folds_profitable"]]
-    ax.barh(range(len(top)), top["mean_return"], color=colors, edgecolor="none", alpha=0.85)
+for ax, (mode, rlb) in zip(axes, rules.items()):
+    top = rlb.head(15).copy()
+    top["label"] = top["rule"] + " " + top["params"].str[:24]
+    colors = ["seagreen" if e > 0 else "firebrick" for e in top["mean_excess_return"]]
+    ax.barh(range(len(top)), top["mean_excess_return"], color=colors,
+            edgecolor="none", alpha=0.85)
     ax.set_yticks(range(len(top))); ax.set_yticklabels(top["label"], fontsize=6.5)
-    ax.axvline(0, color="k", lw=0.8)
-    ax.set_xlabel("mean OOS net return (dev folds)")
-    ax.set_title(f"Top-15 rule configs — {mode}\n(green = profitable >50% folds)",
+    ax.axvline(0, color="k", lw=1.0)
+    ax.set_xlabel("mean OOS excess return vs B&H (dev folds)")
+    ax.set_title(f"Top-15 rule configs — {mode}\n(green = beats buy & hold)",
                  fontweight="bold", fontsize=9)
 plt.tight_layout(); plt.show()
 """)
@@ -513,8 +516,10 @@ md(r"""
 ## 9. Model search — 10 families × 2 modes, profit-maximizing Optuna
 
 Each study jointly searches model hyperparameters and strategy wrapper (horizon,
-threshold, sizing, feature set), **objective = mean OOS net return − 0.25·std**
-through the full cost-aware backtest. ML uses Optuna TPE + median pruning.
+threshold, sizing, feature set), **objective = mean OOS _excess return vs buy & hold_
+− 0.25·std** through the full cost-aware backtest. Optimising *alpha over B&H*, not
+raw return, so a strategy is only rewarded for **beating the benchmark**. ML uses
+Optuna TPE + median pruning.
 """)
 
 code(r"""
@@ -526,36 +531,39 @@ for key, r in ml_results.items():
     name, mode = key.split("__")
     a = r.get("best_attrs") or {}
     rows.append({"model": name, "mode": mode,
-                 "dev_score":         round(r["best_score"], 4),
+                 "dev_score_excess":  round(r["best_score"], 4),
+                 "dev_mean_excess":   round(a.get("mean_excess_return", np.nan), 4),
                  "dev_mean_return":   round(a.get("mean_return", np.nan), 4),
                  "dev_mean_sharpe":   round(a.get("mean_sharpe", np.nan), 3),
-                 "folds_profitable":  a.get("pct_folds_profitable"),
+                 "folds_beat_bh":     a.get("pct_folds_beat_bh"),
                  "horizon":           r["best_params"].get("horizon"),
                  "feature_set":       r["best_params"].get("feature_set"),
                  "sizing":            r["best_params"].get("sizing")})
 dev_lb = (pd.DataFrame(rows)
-          .sort_values("dev_score", ascending=False)
+          .sort_values("dev_score_excess", ascending=False)
           .reset_index(drop=True))
-print("Dev-set (cross-validated) leaderboard — ranked by profit-stability score:")
+print("Dev-set leaderboard — ranked by mean OOS EXCESS return vs B&H (− 0.25·std):")
 dev_lb
 """)
 
 code(r"""
-# ── Dev leaderboard bar chart ────────────────────────────────────────────────
+# ── Dev leaderboard bar chart — EXCESS return vs B&H ─────────────────────────
 fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 for ax, mode in zip(axes, ("long_only", "long_short")):
-    sub = dev_lb[dev_lb["mode"] == mode].head(10).copy()
-    colors = [plt.cm.RdYlGn(0.15 + 0.7 * min(max(r+0.1, 0), 1))
-              for r in sub["dev_mean_return"]]
-    ax.barh(range(len(sub)), sub["dev_mean_return"], color=colors, edgecolor="none")
+    sub = dev_lb[dev_lb["mode"] == mode].sort_values("dev_mean_excess",
+                                                      ascending=True).tail(10)
+    colors = ["seagreen" if e > 0 else "firebrick" for e in sub["dev_mean_excess"]]
+    ax.barh(range(len(sub)), sub["dev_mean_excess"], color=colors, edgecolor="none", alpha=0.85)
     ax.set_yticks(range(len(sub))); ax.set_yticklabels(sub["model"], fontsize=8)
-    ax.axvline(0, color="k", lw=0.8)
-    ax.set_xlabel("dev mean OOS net return")
-    ax.set_title(f"Dev mean return by model — {mode}", fontweight="bold")
-    for i, row in sub.reset_index(drop=True).iterrows():
-        fp = row["folds_profitable"]
-        ax.text(max(row["dev_mean_return"], 0) + 0.01, i,
-                f"{fp:.0%} folds", va="center", fontsize=7)
+    ax.axvline(0, color="k", lw=1.0)
+    ax.set_xlabel("dev mean OOS excess return vs B&H")
+    ax.set_title(f"Dev mean EXCESS return (alpha) — {mode}\n"
+                 f"(>0 = beats buy & hold)", fontweight="bold", fontsize=9)
+    for i, (_, row) in enumerate(sub.iterrows()):
+        fb = row["folds_beat_bh"]
+        ax.text(row["dev_mean_excess"] + (0.01 if row["dev_mean_excess"] >= 0 else -0.01), i,
+                f"{fb:.0%} beat B&H", va="center", fontsize=6.5,
+                ha="left" if row["dev_mean_excess"] >= 0 else "right")
 plt.tight_layout(); plt.show()
 """)
 
@@ -604,11 +612,13 @@ bh_row = lb[lb.strategy == "BUY & HOLD"].iloc[0]
 hold_ret = data["ret"].iloc[data["hold_idx"]]
 
 print(f"HOLDOUT buy & hold: return={bh_row['total_return']:.1%}  "
-      f"Sharpe={bh_row['sharpe']:.2f}  maxDD={bh_row['max_drawdown']:.1%}\n")
+      f"Sharpe={bh_row['sharpe']:.2f}  maxDD={bh_row['max_drawdown']:.1%}")
+print("All strategies below are scored by EXCESS RETURN over this benchmark.\n")
 
-cols = ["strategy","type","mode","total_return","sharpe","sortino",
-        "max_drawdown","calmar","win_rate","exposure","n_trades"]
-print("Holdout leaderboard (ranked by net total return):")
+# excess_return & vs_bh_x come straight from the pipeline (profit vs B&H, not alone)
+cols = ["strategy","type","mode","total_return","excess_return","vs_bh_x",
+        "sharpe","max_drawdown","calmar","win_rate","n_trades"]
+print("Holdout leaderboard (ranked by EXCESS return vs Buy & Hold):")
 lb[cols].head(15)
 """)
 
@@ -649,29 +659,31 @@ plt.tight_layout(); plt.show()
 """)
 
 code(r"""
-# ── Holdout leaderboard: return & Sharpe comparison ──────────────────────────
+# ── Holdout leaderboard: EXCESS-return & total-vs-B&H comparison ──────────────
 plot_lb = lb[lb.type != "benchmark"].head(12).copy()
 plot_lb["label"] = plot_lb["strategy"].str[:28] + " [" + plot_lb["mode"].str[:2] + "]"
 bh_ret = float(bh_row["total_return"])
 
 fig, axes = plt.subplots(1, 2, figsize=(14, 5.5))
-colors = [plt.cm.RdYlGn(0.1 + 0.8 * min(max((r - bh_ret * 0.5) / (bh_ret * 1.5), 0), 1))
-          for r in plot_lb["total_return"]]
-axes[0].barh(range(len(plot_lb)), plot_lb["total_return"] * 100,
-             color=colors, edgecolor="none")
-axes[0].axvline(bh_ret * 100, color="steelblue", lw=2, ls="--", label=f"B&H {bh_ret:.1%}")
-axes[0].set_yticks(range(len(plot_lb))); axes[0].set_yticklabels(plot_lb["label"], fontsize=7.5)
-axes[0].set_xlabel("holdout net return (%)"); axes[0].legend()
-axes[0].set_title("Holdout total return vs Buy & Hold", fontweight="bold")
 
-sh_colors = [plt.cm.RdYlGn(0.1 + 0.8 * min(max((s + 0.5) / 3, 0), 1))
-             for s in plot_lb["sharpe"]]
-axes[1].barh(range(len(plot_lb)), plot_lb["sharpe"], color=sh_colors, edgecolor="none")
-axes[1].axvline(float(bh_row["sharpe"]), color="steelblue", lw=2, ls="--",
-                label=f"B&H Sharpe {bh_row['sharpe']:.2f}")
-axes[1].set_yticks(range(len(plot_lb))); axes[1].set_yticklabels(plot_lb["label"], fontsize=7.5)
-axes[1].set_xlabel("Sharpe ratio"); axes[1].legend()
-axes[1].set_title("Holdout Sharpe ratio vs Buy & Hold", fontweight="bold")
+# LEFT: excess return vs B&H (the headline metric)
+ex = plot_lb.sort_values("excess_return")
+colors = ["seagreen" if e > 0 else "firebrick" for e in ex["excess_return"]]
+axes[0].barh(range(len(ex)), ex["excess_return"] * 100, color=colors, edgecolor="none", alpha=0.85)
+axes[0].axvline(0, color="steelblue", lw=2, ls="--", label="Buy & Hold (0 = tie)")
+axes[0].set_yticks(range(len(ex))); axes[0].set_yticklabels(ex["label"], fontsize=7.5)
+axes[0].set_xlabel("EXCESS return vs B&H (percentage points)"); axes[0].legend()
+axes[0].set_title("Holdout EXCESS return over Buy & Hold\n(green = beats B&H)",
+                  fontweight="bold")
+
+# RIGHT: absolute total return with B&H reference line
+tot = plot_lb.sort_values("total_return")
+tcolors = ["seagreen" if t > bh_ret else "firebrick" for t in tot["total_return"]]
+axes[1].barh(range(len(tot)), tot["total_return"] * 100, color=tcolors, edgecolor="none", alpha=0.85)
+axes[1].axvline(bh_ret * 100, color="steelblue", lw=2, ls="--", label=f"B&H = {bh_ret:.1%}")
+axes[1].set_yticks(range(len(tot))); axes[1].set_yticklabels(tot["label"], fontsize=7.5)
+axes[1].set_xlabel("holdout total net return (%)"); axes[1].legend()
+axes[1].set_title("Holdout total return vs Buy & Hold line", fontweight="bold")
 plt.tight_layout(); plt.show()
 """)
 
@@ -686,9 +698,10 @@ def best_of(mode):
 for mode in ("long_only", "long_short"):
     w = best_of(mode)
     if w is None: continue
-    beat = "BEATS  ✓" if w["total_return"] > bh_row["total_return"] else "TRAILS ✗"
+    beat = "BEATS  ✓" if w["excess_return"] > 0 else "TRAILS ✗"
     print(f"[{mode}] winner: {w['strategy']}")
-    print(f"  return {w['total_return']:.1%} vs B&H {bh_row['total_return']:.1%}  → {beat} on return")
+    print(f"  return {w['total_return']:.1%}  vs  B&H {bh_row['total_return']:.1%}   "
+          f"→  EXCESS {w['excess_return']:+.1%}  ({w['vs_bh_x']:.2f}× B&H)  {beat}")
     print(f"  Sharpe {w['sharpe']:.2f}  maxDD {w['max_drawdown']:.1%}  "
           f"Calmar {w['calmar']:.2f}  wins {w['win_rate']:.1%}  trades {int(w['n_trades'])}\n")
 
@@ -849,32 +862,32 @@ ax.legend(); ax.set_xlabel("total return"); plt.tight_layout(); plt.show()
 """)
 
 code(r"""
-# 4) IS vs OOS gap for all strategies
+# 4) IS vs OOS gap — on EXCESS return vs B&H (dev folds vs holdout)
 gap_rows = []
 for _, row in lb[lb.type != "benchmark"].iterrows():
     gap_rows.append({"strategy": str(row["strategy"])[:25] + f" [{row['mode'][:2]}]",
-                     "OOS_return": row["total_return"],
-                     "dev_mean_return": row.get("dev_mean_return", np.nan)})
-gap_df = pd.DataFrame(gap_rows).dropna(subset=["dev_mean_return"]).head(12)
-gap_df["IS_OOS_gap"] = gap_df["dev_mean_return"] - gap_df["OOS_return"]
+                     "OOS_excess": row["excess_return"],
+                     "dev_mean_excess": row.get("dev_mean_excess", np.nan)})
+gap_df = pd.DataFrame(gap_rows).dropna(subset=["dev_mean_excess"]).head(12)
+gap_df["IS_OOS_gap"] = gap_df["dev_mean_excess"] - gap_df["OOS_excess"]
 
 fig, ax = plt.subplots(figsize=(10, 5))
 x = np.arange(len(gap_df))
 w = 0.35
-ax.bar(x - w/2, gap_df["dev_mean_return"] * 100, w, label="dev mean OOS return",
+ax.bar(x - w/2, gap_df["dev_mean_excess"] * 100, w, label="dev mean OOS excess vs B&H",
        color="steelblue", alpha=0.8)
-ax.bar(x + w/2, gap_df["OOS_return"] * 100, w, label="holdout return",
+ax.bar(x + w/2, gap_df["OOS_excess"] * 100, w, label="holdout excess vs B&H",
        color="seagreen", alpha=0.8)
 ax.set_xticks(x); ax.set_xticklabels(gap_df["strategy"], rotation=45, ha="right", fontsize=7.5)
 ax.axhline(0, color="k", lw=0.8)
-ax.set_ylabel("net return (%)")
-ax.set_title("In-sample (dev folds) vs Out-of-sample (holdout) returns\n"
-             "(smaller gap = less overfit)", fontweight="bold")
+ax.set_ylabel("excess return vs B&H (%)")
+ax.set_title("In-sample (dev folds) vs Out-of-sample (holdout) EXCESS return over B&H\n"
+             "(smaller gap = less overfit; >0 = beats benchmark)", fontweight="bold")
 ax.legend(fontsize=8)
 plt.tight_layout(); plt.show()
 
-print("IS→OOS gap (dev_mean - holdout):  larger = more overfit")
-print(gap_df[["strategy","dev_mean_return","OOS_return","IS_OOS_gap"]].to_string(index=False))
+print("IS→OOS gap on excess-vs-B&H (dev_mean − holdout):  larger = more overfit")
+print(gap_df[["strategy","dev_mean_excess","OOS_excess","IS_OOS_gap"]].to_string(index=False))
 """)
 
 # ======================================================= 13. CONCLUSION
@@ -895,22 +908,23 @@ code(r"""
 print("="*72)
 print("FINAL VERDICT  (holdout, net of costs)")
 print("="*72)
-print(f"Buy & Hold      : return {bh_row['total_return']:>8.1%} | Sharpe {bh_row['sharpe']:>5.2f} "
-      f"| maxDD {bh_row['max_drawdown']:>7.1%}")
+print(f"Buy & Hold      : return {bh_row['total_return']:>8.1%} | excess  +0.0% | "
+      f"Sharpe {bh_row['sharpe']:>5.2f} | maxDD {bh_row['max_drawdown']:>7.1%}")
 for mode in ("long_only", "long_short"):
     w = best_of(mode)
     if w is None: continue
-    beat = "BEATS  ✓" if w["total_return"] > bh_row["total_return"] else "TRAILS ✗"
-    print(f"Best {mode:<12}: return {w['total_return']:>8.1%} | Sharpe {w['sharpe']:>5.2f} "
-          f"| maxDD {w['max_drawdown']:>7.1%} | Calmar {w['calmar']:>5.2f}  "
-          f"{beat}   <- {w['strategy']}")
-ov = lb.iloc[0]
+    beat = "BEATS  ✓" if w["excess_return"] > 0 else "TRAILS ✗"
+    print(f"Best {mode:<12}: return {w['total_return']:>8.1%} | excess {w['excess_return']:>+6.1%} | "
+          f"Sharpe {w['sharpe']:>5.2f} | maxDD {w['max_drawdown']:>7.1%}  "
+          f"{beat}  <- {w['strategy']}")
+ov = lb.iloc[0]   # leaderboard is sorted by excess_return
 print("-"*72)
-print(f"Highest holdout return  : {ov['strategy']} [{ov['mode']}] = {ov['total_return']:.1%} "
-      f"(Sharpe {ov['sharpe']:.2f})")
+print(f"Biggest alpha over B&H  : {ov['strategy']} [{ov['mode']}] = "
+      f"{ov['excess_return']:+.1%} excess  ({ov['vs_bh_x']:.2f}× B&H, "
+      f"total {ov['total_return']:.1%}, Sharpe {ov['sharpe']:.2f})")
 best_shp = lb[lb.type != "benchmark"].sort_values("sharpe", ascending=False).iloc[0]
 print(f"Best risk-adjusted      : {best_shp['strategy']} [{best_shp['mode']}] "
-      f"= Sharpe {best_shp['sharpe']:.2f} (return {best_shp['total_return']:.1%})")
+      f"= Sharpe {best_shp['sharpe']:.2f} (excess {best_shp['excess_return']:+.1%})")
 print("="*72)
 print(f"\nNull-test p-value       : {null['p_value']:.3f}  "
       f"{'(edge likely real)' if null['p_value'] < 0.05 else '(edge NOT significant at 5%)'}")

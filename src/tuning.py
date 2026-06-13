@@ -1,8 +1,9 @@
 """Profit-first hyperparameter search.
 
-Objective (maximized): mean fold NET total return  -  0.25 * std(fold returns).
-Every trial runs the full signal -> position -> cost-aware backtest pipeline on
-each walk-forward validation fold; the final holdout never enters any study.
+Objective (maximized): mean fold EXCESS RETURN vs buy-and-hold  -  0.25 * std.
+Scoring on alpha (strategy − B&H per fold) so the search explicitly maximises
+outperformance, not just raw return. B&H is computed per fold window.
+Every trial runs the full signal -> position -> cost-aware backtest pipeline.
 Rules use exhaustive grid search; ML families use Optuna TPE + MedianPruner.
 """
 from __future__ import annotations
@@ -14,7 +15,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .backtest import backtest, proba_to_signal
+from .backtest import backtest, buy_and_hold, proba_to_signal
 from .metrics import perf_metrics
 from .models import RULES, make_model
 
@@ -37,21 +38,29 @@ def score_folds(fold_returns: list[float]) -> float:
 
 def eval_signal_on_folds(signal: pd.Series, ret: pd.Series, folds, cost_bps: float,
                          short_funding_bps: float = 0.0, ppy: int = 365) -> dict:
-    """Slice a (full-length, causal) signal into fold test windows and backtest each."""
+    """Backtest signal on each fold test window; score on EXCESS RETURN vs B&H."""
     fold_stats = []
     for _, va in folds:
-        bt = backtest(signal.iloc[va], ret.iloc[va], cost_bps, short_funding_bps)
-        m = perf_metrics(bt, ppy)
-        fold_stats.append({"total_return": m["total_return"], "sharpe": m["sharpe"],
+        fold_ret = ret.iloc[va]
+        bt    = backtest(signal.iloc[va], fold_ret, cost_bps, short_funding_bps)
+        bh_bt = buy_and_hold(fold_ret, cost_bps)
+        m     = perf_metrics(bt,    ppy)
+        bh_m  = perf_metrics(bh_bt, ppy)
+        excess = m["total_return"] - bh_m["total_return"]
+        fold_stats.append({"total_return": m["total_return"], "bh_return": bh_m["total_return"],
+                           "excess_return": excess, "sharpe": m["sharpe"],
                            "max_drawdown": m["max_drawdown"], "n_trades": m["n_trades"]})
-    rets = [f["total_return"] for f in fold_stats]
+    excesses = [f["excess_return"] for f in fold_stats]
+    rets     = [f["total_return"]  for f in fold_stats]
     return {
-        "score": score_folds(rets),
-        "mean_return": float(np.mean(rets)),
-        "std_return": float(np.std(rets)),
-        "mean_sharpe": float(np.mean([f["sharpe"] for f in fold_stats])),
-        "pct_folds_profitable": float(np.mean([r > 0 for r in rets])),
-        "fold_stats": fold_stats,
+        "score":                  score_folds(excesses),   # optimise alpha, not raw return
+        "mean_excess_return":     float(np.mean(excesses)),
+        "mean_return":            float(np.mean(rets)),
+        "std_return":             float(np.std(rets)),
+        "mean_sharpe":            float(np.mean([f["sharpe"] for f in fold_stats])),
+        "pct_folds_beat_bh":      float(np.mean([e > 0 for e in excesses])),
+        "pct_folds_profitable":   float(np.mean([r > 0 for r in rets])),
+        "fold_stats":             fold_stats,
     }
 
 
@@ -70,8 +79,9 @@ def grid_search_rules(df_prices: pd.DataFrame, ret: pd.Series, folds, mode: str,
             signal = spec["fn"](df_prices, mode=mode, **params).reindex(ret.index)
             res = eval_signal_on_folds(signal, ret, folds, cost_bps, funding, ppy)
             rows.append({"rule": rname, "params": json.dumps(params), **{
-                k: res[k] for k in ("score", "mean_return", "std_return",
-                                    "mean_sharpe", "pct_folds_profitable")}})
+                k: res[k] for k in ("score", "mean_excess_return", "mean_return",
+                                    "std_return", "mean_sharpe", "pct_folds_beat_bh",
+                                    "pct_folds_profitable")}})
     return (pd.DataFrame(rows)
             .sort_values("score", ascending=False)
             .reset_index(drop=True))
@@ -109,22 +119,29 @@ def ml_eval_config(model_name: str, model_params: dict, strat: dict, X: pd.DataF
                                  thr_long=strat.get("thr_long", 0.55),
                                  thr_short=strat.get("thr_short", 0.45),
                                  scale=strat.get("scale", 0.2))
-        bt = backtest(signal, ret.iloc[va], cost_bps, funding)
-        m = perf_metrics(bt, ppy)
-        fold_stats.append({"total_return": m["total_return"], "sharpe": m["sharpe"],
+        fold_ret = ret.iloc[va]
+        bt    = backtest(signal, fold_ret, cost_bps, funding)
+        bh_m  = perf_metrics(buy_and_hold(fold_ret, cost_bps), ppy)
+        m     = perf_metrics(bt, ppy)
+        excess = m["total_return"] - bh_m["total_return"]
+        fold_stats.append({"total_return": m["total_return"], "bh_return": bh_m["total_return"],
+                           "excess_return": excess, "sharpe": m["sharpe"],
                            "max_drawdown": m["max_drawdown"], "n_trades": m["n_trades"]})
-        running.append(m["total_return"])
+        running.append(excess)
         if report_cb is not None:
-            report_cb(fold_i, float(np.mean(running)))
+            report_cb(fold_i, float(np.mean(running)))   # report running mean EXCESS
 
-    rets = [f["total_return"] for f in fold_stats]
+    excesses = [f["excess_return"] for f in fold_stats]
+    rets     = [f["total_return"]  for f in fold_stats]
     return {
-        "score": score_folds(rets),
-        "mean_return": float(np.mean(rets)),
-        "std_return": float(np.std(rets)),
-        "mean_sharpe": float(np.mean([f["sharpe"] for f in fold_stats])),
+        "score":                score_folds(excesses),   # optimise alpha vs B&H
+        "mean_excess_return":   float(np.mean(excesses)),
+        "mean_return":          float(np.mean(rets)),
+        "std_return":           float(np.std(rets)),
+        "mean_sharpe":          float(np.mean([f["sharpe"] for f in fold_stats])),
+        "pct_folds_beat_bh":    float(np.mean([e > 0 for e in excesses])),
         "pct_folds_profitable": float(np.mean([r > 0 for r in rets])),
-        "fold_stats": fold_stats,
+        "fold_stats":           fold_stats,
     }
 
 
@@ -235,9 +252,12 @@ def run_study(model_name: str, mode: str, X, fwd_returns, ret, folds, feature_se
         res = ml_eval_config(model_name, mparams, strat, X, fwd_returns, ret, folds,
                              feature_sets, cost_bps, short_funding_bps, mode,
                              seed=seed, ppy=ppy, report_cb=cb)
-        trial.set_user_attr("mean_sharpe", res.get("mean_sharpe"))
-        trial.set_user_attr("pct_folds_profitable", res.get("pct_folds_profitable"))
+        trial.set_user_attr("mean_excess_return", res.get("mean_excess_return"))
         trial.set_user_attr("mean_return", res.get("mean_return"))
+        trial.set_user_attr("mean_sharpe", res.get("mean_sharpe"))
+        trial.set_user_attr("pct_folds_beat_bh", res.get("pct_folds_beat_bh"))
+        trial.set_user_attr("pct_folds_profitable", res.get("pct_folds_profitable"))
+        trial.set_user_attr("fold_stats", res.get("fold_stats"))
         return res["score"]
 
     study = optuna.create_study(

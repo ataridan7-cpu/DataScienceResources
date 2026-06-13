@@ -135,8 +135,20 @@ def holdout_signal_rule(data, rule_name: str, params: dict, mode: str) -> pd.Ser
 
 def final_leaderboard(data, ml_results: dict, rules_results: dict, feature_sets: dict,
                       cfg: Config = CFG, top_rules: int = 2) -> tuple[pd.DataFrame, dict]:
-    """One-shot holdout evaluation of every tuned family + top rules + B&H."""
+    """One-shot holdout evaluation of every tuned family + top rules + B&H.
+
+    Every strategy row carries `excess_return` (= total_return − B&H) and
+    `vs_bh_x` (growth-multiple relative to B&H), so profit is always reported
+    against the buy-and-hold benchmark, not in isolation.
+    """
     hold_ret = data["ret"].iloc[data["hold_idx"]]
+    bh = perf_metrics(buy_and_hold(hold_ret, cfg.cost_bps_per_side), cfg.periods_per_year)
+    bh_ret = bh["total_return"]
+
+    def _vs_bh(m: dict) -> dict:
+        return {"excess_return": m["total_return"] - bh_ret,
+                "vs_bh_x": (1 + m["total_return"]) / (1 + bh_ret)}
+
     entries, signals = [], {}
 
     for key, res in ml_results.items():
@@ -145,12 +157,14 @@ def final_leaderboard(data, ml_results: dict, rules_results: dict, feature_sets:
         name, mode = key.split("__")
         sig = holdout_signal_ml(data, name, res["best_params"], mode, feature_sets, cfg)
         funding = cfg.short_funding_bps_per_bar if mode == "long_short" else 0.0
-        bt = backtest(sig, hold_ret, cfg.cost_bps_per_side, funding)
-        m = perf_metrics(bt, cfg.periods_per_year)
+        m = perf_metrics(backtest(sig, hold_ret, cfg.cost_bps_per_side, funding),
+                         cfg.periods_per_year)
+        attrs = res.get("best_attrs") or {}
         entries.append({"strategy": name, "type": "ml", "mode": mode,
                         "dev_score": res["best_score"],
-                        "dev_mean_return": (res.get("best_attrs") or {}).get("mean_return"),
-                        **m})
+                        "dev_mean_excess": attrs.get("mean_excess_return"),
+                        "dev_mean_return": attrs.get("mean_return"),
+                        **m, **_vs_bh(m)})
         signals[key] = sig
 
     for mode, lb in rules_results.items():
@@ -158,19 +172,21 @@ def final_leaderboard(data, ml_results: dict, rules_results: dict, feature_sets:
             params = json.loads(row["params"])
             sig = holdout_signal_rule(data, row["rule"], params, mode)
             funding = cfg.short_funding_bps_per_bar if mode == "long_short" else 0.0
-            bt = backtest(sig, hold_ret, cfg.cost_bps_per_side, funding)
-            m = perf_metrics(bt, cfg.periods_per_year)
+            m = perf_metrics(backtest(sig, hold_ret, cfg.cost_bps_per_side, funding),
+                             cfg.periods_per_year)
             key = f"{row['rule']}({row['params']})__{mode}"
             entries.append({"strategy": f"{row['rule']} {row['params']}", "type": "rule",
                             "mode": mode, "dev_score": row["score"],
-                            "dev_mean_return": row["mean_return"], **m})
+                            "dev_mean_excess": row.get("mean_excess_return"),
+                            "dev_mean_return": row["mean_return"], **m, **_vs_bh(m)})
             signals[key] = sig
 
-    bh = perf_metrics(buy_and_hold(hold_ret, cfg.cost_bps_per_side), cfg.periods_per_year)
     entries.append({"strategy": "BUY & HOLD", "type": "benchmark", "mode": "long_only",
-                    "dev_score": np.nan, "dev_mean_return": np.nan, **bh})
+                    "dev_score": np.nan, "dev_mean_excess": np.nan,
+                    "dev_mean_return": np.nan, **bh,
+                    "excess_return": 0.0, "vs_bh_x": 1.0})
 
     lb = (pd.DataFrame(entries)
-          .sort_values("total_return", ascending=False)
+          .sort_values("excess_return", ascending=False)
           .reset_index(drop=True))
     return lb, signals
