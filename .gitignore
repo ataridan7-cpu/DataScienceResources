@@ -1,0 +1,3 @@
+# Cached market-data snapshot (created on first notebook run for reproducibility).
+# Not committed: each environment fetches its own snapshot once, then reuses it.
+macro_data_cache.pkl
